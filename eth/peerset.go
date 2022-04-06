@@ -18,6 +18,7 @@ package eth
 
 import (
 	"errors"
+	"github.com/ethereum/go-ethereum/log"
 	"math/big"
 	"sync"
 	"time"
@@ -284,10 +285,12 @@ func (ps *peerSet) waitDiffExtension(peer *eth.Peer) (*diff.Peer, error) {
 func (ps *peerSet) waitTrustExtension(peer *eth.Peer) (*trust.Peer, error) {
 	// If the peer does not support a compatible `trust`, don't wait
 	if !peer.RunningCap(trust.ProtocolName, trust.ProtocolVersions) {
+		log.Info("##running cap failed")
 		return nil, nil
 	}
 	// If the peer isn't verify node, don't register trust extension into eth protocol.
 	if !peer.VerifyNode() {
+		log.Info("##verify node failed")
 		return nil, nil
 	}
 	// Ensure nobody can double connect
@@ -339,7 +342,13 @@ func (ps *peerSet) GetVerifyPeers() []core.VerifyPeer {
 	defer ps.lock.RUnlock()
 
 	res := make([]core.VerifyPeer, 0)
+	log.Info("### peers", "number", len(ps.peers))
 	for _, p := range ps.peers {
+		if p.trustExt == nil {
+			log.Info("peer has not trust ext", "ID", p.ID())
+		} else if p.trustExt.Peer == nil {
+			log.Info("Peer of peer", "ID", p.ID(), "is nil")
+		}
 		if p.trustExt != nil && p.trustExt.Peer != nil {
 			res = append(res, p.trustExt.Peer)
 		}
@@ -371,8 +380,10 @@ func (ps *peerSet) registerPeer(peer *eth.Peer, ext *snap.Peer, diffExt *diff.Pe
 	if diffExt != nil {
 		eth.diffExt = &diffPeer{diffExt}
 	}
+	log.Info("##register trust ext")
 	if trustExt != nil {
 		eth.trustExt = &trustPeer{trustExt}
+		log.Info("##register trust ext succeed")
 	}
 	ps.peers[id] = eth
 	return nil

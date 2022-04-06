@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -96,6 +97,7 @@ var (
 	errNoSyncActive            = errors.New("no sync active")
 	errTooOld                  = errors.New("peer's protocol version too old")
 	errNoAncestorFound         = errors.New("no common ancestor found")
+	errAncestorNotVerified     = errors.New("ancestor has not been verified")
 )
 
 type Downloader struct {
@@ -1811,6 +1813,10 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 			// The importer will put together a new list of blocks to import, which is a superset
 			// of the blocks delivered from the downloader, and the indexing will be off.
 			log.Debug("Downloaded item processing failed on sidechain import", "index", index, "err", err)
+		}
+		log.Info("###insert chain failed", "error", err.Error())
+		if strings.Contains(err.Error(), "ancestor has not been verified") {
+			return fmt.Errorf("%w: %v", errAncestorNotVerified, err)
 		}
 		return fmt.Errorf("%w: %v", errInvalidChain, err)
 	}

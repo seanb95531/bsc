@@ -321,6 +321,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		peer.Log().Error("Ethereum peer registration failed", "err", err)
 		return err
 	}
+	peer.Log().Info("** ethereum peer", "number", len(h.peers.peers))
 	defer h.removePeer(peer.ID())
 
 	p := h.peers.peer(peer.ID())

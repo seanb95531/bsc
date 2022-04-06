@@ -200,6 +200,10 @@ func (s *StateDB) StartPrefetcher(namespace string) {
 	}
 }
 
+func (s *StateDB) GetSnapDestructs() map[common.Address]struct{} {
+	return s.snapDestructs
+}
+
 // StopPrefetcher terminates a running prefetcher and reports any leftover stats
 // from the gathered metrics.
 func (s *StateDB) StopPrefetcher() {

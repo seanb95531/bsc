@@ -48,6 +48,7 @@ func NewBlockValidator(config *params.ChainConfig, blockchain *BlockChain, engin
 		engine: engine,
 		bc:     blockchain,
 	}
+	log.Info("### new block validator")
 	if mode.NeedRemoteVerify() {
 		log.Info("this node is a fast node with remote state verifier.")
 		validator.remoteValidator = NewVerifyManager(blockchain, peers, mode == InsecureVerify)
@@ -92,13 +93,13 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 			}
 			return nil
 		},
-		// for fast node which verify trie from remote verify peers, a block's H-11 ancestor should have been verify.
-		func() error {
-			if v.remoteValidator != nil && !v.remoteValidator.AncestorVerified(header) {
-				return fmt.Errorf("block's ancessor %x has not been verified", block.Hash())
-			}
-			return nil
-		},
+		//for fast node which verify trie from remote verify peers, a block's H-11 ancestor should have been verify.
+		//func() error {
+		//	if v.remoteValidator != nil && !v.remoteValidator.AncestorVerified(header) {
+		//		return fmt.Errorf("ancestor has not been verified %x", block.Hash())
+		//	}
+		//	return nil
+		//},
 	}
 	validateRes := make(chan error, len(validateFuns))
 	for _, f := range validateFuns {

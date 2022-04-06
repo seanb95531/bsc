@@ -409,6 +409,18 @@ type DiffLayer struct {
 	DiffHash atomic.Value
 }
 
+type DiffLayerMar struct {
+	BlockHash common.Hash
+	Number    uint64
+	Receipts  Receipts // Receipts are duplicated stored to simplify the logic
+	Codes     []DiffCode
+	Destructs []common.Address
+	Accounts  []DiffAccountMar
+	Storages  []DiffStorage
+
+	DiffHash atomic.Value
+}
+
 type ExtDiffLayer struct {
 	BlockHash common.Hash
 	Number    uint64
@@ -472,6 +484,18 @@ type DiffCode struct {
 type DiffAccount struct {
 	Account common.Address
 	Blob    []byte
+}
+
+type DiffAccountMar struct {
+	Account common.Address
+	FullAccount Account
+}
+
+type Account struct {
+	Nonce    uint64
+	Balance  *big.Int
+	Root     []byte
+	CodeHash []byte
 }
 
 type DiffStorage struct {

@@ -203,6 +203,7 @@ type BlockChain struct {
 	chainFeed     event.Feed
 	chainSideFeed event.Feed
 	chainHeadFeed event.Feed
+	chainBlockFeed event.Feed
 	logsFeed      event.Feed
 	blockProcFeed event.Feed
 	scope         event.SubscriptionScope
@@ -226,6 +227,7 @@ type BlockChain struct {
 	// trusted diff layers
 	diffLayerCache             *lru.Cache   // Cache for the diffLayers
 	diffLayerRLPCache          *lru.Cache   // Cache for the rlp encoded diffLayers
+	diffLayerChanCache         *lru.Cache   // Cache for
 	diffQueue                  *prque.Prque // A Priority queue to store recent diff layer
 	diffQueueBuffer            chan *types.DiffLayer
 	diffLayerFreezerBlockLimit uint64
@@ -277,6 +279,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	futureBlocks, _ := lru.New(maxFutureBlocks)
 	diffLayerCache, _ := lru.New(diffLayerCacheLimit)
 	diffLayerRLPCache, _ := lru.New(diffLayerRLPCacheLimit)
+	diffLayerChanCache, _ := lru.New(diffLayerCacheLimit)
 
 	bc := &BlockChain{
 		chainConfig: chainConfig,
@@ -299,6 +302,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		badBlockCache:         badBlockCache,
 		diffLayerCache:        diffLayerCache,
 		diffLayerRLPCache:     diffLayerRLPCache,
+		diffLayerChanCache:    diffLayerChanCache,
 		txLookupCache:         txLookupCache,
 		futureBlocks:          futureBlocks,
 		engine:                engine,
@@ -502,6 +506,8 @@ func (bc *BlockChain) cacheReceipts(hash common.Hash, receipts types.Receipts) {
 }
 
 func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, sorted bool) {
+	diffLayerCh := make(chan struct{})
+	bc.diffLayerChanCache.Add(diffLayer.BlockHash, diffLayerCh)
 	if !sorted {
 		sort.SliceStable(diffLayer.Codes, func(i, j int) bool {
 			return diffLayer.Codes[i].Hash.Hex() < diffLayer.Codes[j].Hash.Hex()
@@ -520,7 +526,36 @@ func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, sorted bool) {
 	if bc.diffLayerCache.Len() >= diffLayerCacheLimit {
 		bc.diffLayerCache.RemoveOldest()
 	}
+	accNum := len(diffLayer.Accounts)
+	diffLayerMar := types.DiffLayerMar{
+		BlockHash: diffLayer.BlockHash,
+		Number: diffLayer.Number,
+		Receipts: diffLayer.Receipts,
+		Codes: diffLayer.Codes,
+		Destructs: diffLayer.Destructs,
+		Accounts: make([]types.DiffAccountMar, accNum),
+		Storages: diffLayer.Storages,
+		DiffHash: diffLayer.DiffHash,
+	}
+	for index, account := range diffLayer.Accounts {
+		full, _ := snapshot.FullAccount(account.Blob)
+		fullAccount := types.Account{
+			Nonce: full.Nonce,
+			Balance: full.Balance,
+			Root: full.Root,
+			CodeHash: full.CodeHash,
+		}
+		diffLayerMar.Accounts[index] = types.DiffAccountMar{
+			Account: account.Account,
+			FullAccount: fullAccount,
+		}
+ 	}
+	log.Info("##cache difflayer", "number", diffLayer.Number, "hash", diffLayer.BlockHash, "diffLayer", diffLayerMar)
+
+	//json.MarshalIndent()
 	bc.diffLayerCache.Add(diffLayer.BlockHash, diffLayer)
+	close(diffLayerCh)
+	log.Info("===send signal")
 	if bc.db.DiffStore() != nil {
 		// push to priority queue before persisting
 		bc.diffQueueBuffer <- diffLayer
@@ -2072,6 +2107,15 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 	}()
 
 	for ; block != nil && err == nil || err == ErrKnownBlock; block, err = it.next() {
+		if bc.validator.RemoteVerifyManager() != nil {
+			for !bc.Validator().RemoteVerifyManager().AncestorVerified(block.Header()) {
+				if bc.insertStopped() {
+					break
+				}
+				log.Info("block ancestor has not been verified", "number", block.Number(), "hash", block.Hash())
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
 		// If the chain is terminating, stop processing blocks
 		if bc.insertStopped() {
 			log.Debug("Abort during block processing")
@@ -2231,6 +2275,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, verifySeals bool) (int, er
 		stats.processed++
 		stats.usedGas += usedGas
 
+		bc.chainBlockFeed.Send(ChainHeadEvent{block})
 		dirty, _ := bc.stateCache.TrieDB().Size()
 		stats.report(chain, it.index, dirty)
 	}
@@ -3101,6 +3146,10 @@ func (bc *BlockChain) SubscribeChainHeadEvent(ch chan<- ChainHeadEvent) event.Su
 	return bc.scope.Track(bc.chainHeadFeed.Subscribe(ch))
 }
 
+func (bc *BlockChain) SubscribeChainBlockEvent(ch chan<- ChainHeadEvent) event.Subscription {
+	return bc.scope.Track(bc.chainBlockFeed.Subscribe(ch))
+}
+
 // SubscribeChainSideEvent registers a subscription of ChainSideEvent.
 func (bc *BlockChain) SubscribeChainSideEvent(ch chan<- ChainSideEvent) event.Subscription {
 	return bc.scope.Track(bc.chainSideFeed.Subscribe(ch))
@@ -3175,9 +3224,12 @@ func (bc *BlockChain) GetRootByDiffHash(blockNumber uint64, blockHash common.Has
 				return &res
 			}
 
+			log.Info("calculate diffhash from verify node of block", "diffhash", hash , "blcokhash", blockHash)
 			diff.DiffHash.Store(hash)
 		}
 
+		//log.Info("diffhash from difflayer of verify node", "diffhash", diff.DiffHash.Load().(common.Hash), "blcokhash", blockHash)
+		log.Info("difflayer of fast node", "hash", blockHash, "number", blockNumber, "difflayer", diff)
 		if diffHash != diff.DiffHash.Load().(common.Hash) {
 			res.Status = types.StatusDiffHashMismatch
 			return &res
@@ -3200,6 +3252,7 @@ func (bc *BlockChain) GetTrustedDiffLayer(blockHash common.Hash) *types.DiffLaye
 		return diff
 	}
 
+	log.Info("diff cache is empty")
 	diffStore := bc.db.DiffStore()
 	if diffStore != nil {
 		diff = rawdb.ReadDiffLayer(diffStore, blockHash)
@@ -3229,6 +3282,7 @@ func (bc *BlockChain) GenerateDiffLayer(blockHash common.Hash) (*types.DiffLayer
 		return nil, fmt.Errorf("state not found for block number (%d): %v", parent.NumberU64(), err)
 	}
 
+	log.Info("@@@1", "snapDestructs", statedb.GetSnapDestructs())
 	// Empty block, no DiffLayer would be generated.
 	if block.Header().TxHash == types.EmptyRootHash {
 		return nil, nil
@@ -3242,6 +3296,7 @@ func (bc *BlockChain) GenerateDiffLayer(blockHash common.Hash) (*types.DiffLayer
 		context := NewEVMBlockContext(block.Header(), bc, nil)
 		vmenv := vm.NewEVM(context, txContext, statedb, bc.Config(), vm.Config{})
 
+		log.Info("%%%1", "snapDestructs", statedb.GetSnapDestructs())
 		if posa, ok := bc.Engine().(consensus.PoSA); ok {
 			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
 				balance := statedb.GetBalance(consensus.SystemAddress)
@@ -3252,11 +3307,16 @@ func (bc *BlockChain) GenerateDiffLayer(blockHash common.Hash) (*types.DiffLayer
 			}
 		}
 
+		log.Info("%%%2", "snapDestructs", statedb.GetSnapDestructs())
 		if _, err := ApplyMessage(vmenv, msg, new(GasPool).AddGas(tx.Gas())); err != nil {
 			return nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
+		log.Info("%%%3", "snapDestructs", statedb.GetSnapDestructs())
 		statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
+		log.Info("%%%4", "snapDestructs", statedb.GetSnapDestructs())
 	}
+
+	log.Info("@@@2", "snapDestructs", statedb.GetSnapDestructs())
 
 	diffLayer := statedb.GenerateDiffLayer()
 	if diffLayer != nil {
@@ -3278,7 +3338,7 @@ func CalculateDiffHash(d *types.DiffLayer) (common.Hash, error) {
 		BlockHash: d.BlockHash,
 		Receipts:  make([]*types.ReceiptForStorage, 0),
 		Number:    d.Number,
-		Codes:     d.Codes,
+		//Codes:     d.Codes,
 		Destructs: d.Destructs,
 		Accounts:  d.Accounts,
 		Storages:  d.Storages,
