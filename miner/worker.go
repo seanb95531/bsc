@@ -41,7 +41,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -96,7 +95,8 @@ var (
 type environment struct {
 	signer   types.Signer
 	state    *state.StateDB // apply state changes here
-	tcount   int            // count of non-system transactions in cycle
+	tcount   int            // tx count in cycle
+	size     uint64         // size of the block we are building
 	gasPool  *core.GasPool  // available gas used to pack transactions
 	coinbase common.Address
 	evm      *vm.EVM
@@ -132,6 +132,11 @@ type task struct {
 	miningStartAt time.Time
 }
 
+// txFits reports whether the transaction fits into the block size limit.
+func (env *environment) txFitsSize(tx *types.Transaction) bool {
+	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
+}
+
 const (
 	commitInterruptNone int32 = iota
 	commitInterruptNewHead
@@ -140,6 +145,11 @@ const (
 	commitInterruptOutOfGas
 	commitInterruptBetterBid
 )
+
+// Block size is capped by the protocol at params.MaxBlockSize. When producing blocks, we
+// try to say below the size including a buffer zone, this is to avoid going over the
+// maximum size with auxiliary data added into the block.
+const maxBlockSizeBufferZone = 1_000_000
 
 // newWorkReq represents a request for new sealing work submitting with relative interrupt notifier.
 type newWorkReq struct {
@@ -664,10 +674,10 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 		if err != nil {
 			return nil, err
 		}
-		state.StartPrefetcher("miner", bundle)
+		state.StartPrefetcher("miner", bundle, nil)
 	} else {
 		if prevEnv == nil {
-			state.StartPrefetcher("miner", nil)
+			state.StartPrefetcher("miner", nil, nil)
 		} else {
 			state.TransferPrefetcher(prevEnv.state)
 		}
@@ -677,6 +687,7 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	env := &environment{
 		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
 		state:    state,
+		size:     uint64(header.Size()),
 		coinbase: coinbase,
 		header:   header,
 		witness:  state.Witness(),
@@ -698,6 +709,8 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction, rece
 	}
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
+	env.size += tx.Size()
+	env.tcount++
 	return receipt.Logs, nil
 }
 
@@ -720,10 +733,12 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, 
 		return nil, err
 	}
 	sc.TxIndex = uint64(len(env.txs))
-	env.txs = append(env.txs, tx.WithoutBlobTxSidecar())
+	txNoBlob := tx.WithoutBlobTxSidecar()
+	env.txs = append(env.txs, txNoBlob)
 	env.receipts = append(env.receipts, receipt)
 	env.sidecars = append(env.sidecars, sc)
 	env.blobs += len(sc.Blobs)
+	env.size += txNoBlob.Size()
 	*env.header.BlobGasUsed += receipt.BlobGasUsed
 	return receipt.Logs, nil
 }
@@ -745,7 +760,10 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction, recei
 
 func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce,
 	interruptCh chan int32, stopTimer *time.Timer) error {
-	gasLimit := env.header.GasLimit
+	var (
+		isCancun = w.chainConfig.IsCancun(env.header.Number, env.header.Time)
+		gasLimit = env.header.GasLimit
+	)
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 		if p, ok := w.engine.(*parlia.Parlia); ok {
@@ -851,7 +869,7 @@ LOOP:
 		// Most of the blob gas logic here is agnostic as to if the chain supports
 		// blobs or not, however the max check panics when called on a chain without
 		// a defined schedule, so we need to verify it's safe to call.
-		if w.chainConfig.IsCancun(env.header.Number, env.header.Time) {
+		if isCancun {
 			left := eip4844.MaxBlobsPerBlock(w.chainConfig, env.header.Time) - env.blobs
 			if left < int(ltx.BlobGas/params.BlobTxBlobGasPerBlob) {
 				log.Trace("Not enough blob space left for transaction", "hash", ltx.Hash, "left", left, "needed", ltx.BlobGas/params.BlobTxBlobGasPerBlob)
@@ -868,23 +886,11 @@ LOOP:
 			continue
 		}
 
-		// Make sure all transactions after osaka have cell proofs
-		if w.chainConfig.IsOsaka(env.header.Number, env.header.Time) {
-			if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-				if sidecar.Version == 0 {
-					log.Info("Including blob tx with v0 sidecar, recomputing proofs", "hash", ltx.Hash)
-					sidecar.Proofs = make([]kzg4844.Proof, 0, len(sidecar.Blobs)*kzg4844.CellProofsPerBlob)
-					for _, blob := range sidecar.Blobs {
-						cellProofs, err := kzg4844.ComputeCellProofs(&blob)
-						if err != nil {
-							panic(err)
-						}
-						sidecar.Proofs = append(sidecar.Proofs, cellProofs...)
-					}
-				}
-			}
+		// if inclusion of the transaction would put the block size over the
+		// maximum we allow, don't add any more txs to the payload.
+		if !env.txFitsSize(tx) {
+			break
 		}
-
 		// Error may be ignored here. The error has already been checked
 		// during transaction acceptance in the transaction pool.
 		from, _ := types.Sender(env.signer, tx)
@@ -908,7 +914,6 @@ LOOP:
 
 		case errors.Is(err, nil):
 			// Everything ok, shift in the next transaction from the same account
-			env.tcount++
 			txs.Shift()
 
 		default:
@@ -1056,12 +1061,17 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 		filter.GasLimitCap = cap
 	}
 
-	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
+	if w.chainConfig.IsOsaka(env.header.Number, env.header.Time) {
+		filter.GasLimitCap = params.MaxTxGas
+	}
+	filter.BlobTxs = false
 	plainTxsStart := time.Now()
 	pendingPlainTxs := w.eth.TxPool().Pending(filter)
 	pendingPlainTxsTimer.UpdateSince(plainTxsStart)
 
-	filter.OnlyPlainTxs, filter.OnlyBlobTxs = false, true
+	filter.BlobTxs = true
+	filter.BlobVersion = types.BlobSidecarVersion0
+
 	blobTxsStart := time.Now()
 	pendingBlobTxs := w.eth.TxPool().Pending(filter)
 	pendingBlobTxsTimer.UpdateSince(blobTxsStart)
@@ -1123,14 +1133,24 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 }
 
 // generateWork generates a sealing block based on the given parameters.
-func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadResult {
-	work, err := w.prepareWork(params, witness)
+func (w *worker) generateWork(genParam *generateParams, witness bool) *newPayloadResult {
+	work, err := w.prepareWork(genParam, witness)
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
 	defer work.discard()
 
-	if !params.noTxs {
+	// Check withdrawals fit max block size.
+	// Due to the cap on withdrawal count, this can actually never happen, but we still need to
+	// check to ensure the CL notices there's a problem if the withdrawal cap is ever lifted.
+	maxBlockSize := params.MaxBlockSize - maxBlockSizeBufferZone
+	if genParam.withdrawals.Size() > maxBlockSize {
+		return &newPayloadResult{err: errors.New("withdrawals exceed max block size")}
+	}
+	// Also add size of withdrawals to work block size.
+	work.size += uint64(genParam.withdrawals.Size())
+
+	if !genParam.noTxs {
 		interrupt := new(atomic.Int32)
 		timer := time.AfterFunc(*w.config.Recommit, func() {
 			interrupt.Store(commitInterruptTimeout)
@@ -1142,7 +1162,7 @@ func (w *worker) generateWork(params *generateParams, witness bool) *newPayloadR
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.recommit))
 		}
 	}
-	body := types.Body{Transactions: work.txs, Withdrawals: params.withdrawals}
+	body := types.Body{Transactions: work.txs, Withdrawals: genParam.withdrawals}
 	allLogs := make([]*types.Log, 0)
 	for _, r := range work.receipts {
 		allLogs = append(allLogs, r.Logs...)

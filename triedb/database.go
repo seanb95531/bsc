@@ -442,6 +442,15 @@ func (db *Database) Disk() ethdb.Database {
 	return db.disk
 }
 
+// SnapshotCompleted returns the indicator if the snapshot is completed.
+func (db *Database) SnapshotCompleted() bool {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return false
+	}
+	return pdb.SnapshotCompleted()
+}
+
 // MergeIncrState merges the state in incremental snapshot into base snapshot
 func (db *Database) MergeIncrState(incrDir string) error {
 	pdb, ok := db.backend.(*pathdb.Database)

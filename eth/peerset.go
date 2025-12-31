@@ -19,7 +19,9 @@ package eth
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
+	"slices"
 	"sync"
 	"time"
 
@@ -463,6 +465,14 @@ func (ps *peerSet) peersWithoutTransaction(hash common.Hash) []*ethPeer {
 		}
 	}
 	return list
+}
+
+// all returns all current peers.
+func (ps *peerSet) all() []*ethPeer {
+	ps.lock.RLock()
+	defer ps.lock.RUnlock()
+
+	return slices.Collect(maps.Values(ps.peers))
 }
 
 // peersWithoutVote retrieves a list of peers that do not have a given

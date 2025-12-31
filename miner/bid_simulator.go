@@ -532,7 +532,7 @@ func (b *bidSimulator) getBlockInterval(parentHeader *types.Header) uint64 {
 
 // checkIfBidExceedsTxGasLimit checks whether any transaction in the bid exceeds the max txn gas.
 func (b *bidSimulator) checkIfBidExceedsTxGasLimit(bid *types.Bid) error {
-	if b.txMaxGas < params.MinTxGasLimitCap {
+	if b.txMaxGas < params.MaxTxGas {
 		return nil
 	}
 	// Scan all txs in the bid to check if any transaction exceeds txGasLimit.

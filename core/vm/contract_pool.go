@@ -14,7 +14,7 @@ var contractPool = sync.Pool{
 }
 
 // GetContract returns a contract from the pool or creates a new one
-func GetContract(caller common.Address, address common.Address, value *uint256.Int, gas uint64, jumpDests map[common.Hash]bitvec) *Contract {
+func GetContract(caller common.Address, address common.Address, value *uint256.Int, gas uint64, jumpDests JumpDestCache) *Contract {
 	contract := contractPool.Get().(*Contract)
 
 	// Reset the contract with new values
@@ -31,10 +31,10 @@ func GetContract(caller common.Address, address common.Address, value *uint256.I
 
 	// Initialize the jump analysis map if it's nil, mostly for tests
 	if jumpDests == nil {
-		jumpDests = make(map[common.Hash]bitvec)
+		jumpDests = newMapJumpDests()
 	}
 	contract.codeBitmapFunc = codeBitmap
-	contract.jumpdests = jumpDests
+	contract.jumpDests = jumpDests
 	contract.analysis = nil
 
 	return contract
