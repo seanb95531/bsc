@@ -876,11 +876,11 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 			}
 			count.Add(1)
 			if count.Load()%1000 == 0 && time.Since(logged) > 8*time.Second {
-				log.Info("Inspecting separate state database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+				log.Info("Inspecting separate state database", "count", count.Load(), "elapsed", common.PrettyDuration(time.Since(start)))
 				logged = time.Now()
 			}
 		}
-		log.Info("Inspecting separate state database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+		log.Info("Inspecting separate state database", "count", count.Load(), "elapsed", common.PrettyDuration(time.Since(start)))
 	}
 
 	var (

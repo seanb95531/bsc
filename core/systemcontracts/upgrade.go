@@ -1063,7 +1063,7 @@ func TryUpdateBuildInSystemContract(config *params.ChainConfig, blockNumber *big
 			upgradeBuildInSystemContract(config, blockNumber, lastBlockTime, blockTime, statedb)
 		}
 		// HistoryStorageAddress is a special system contract in bsc, which can't be upgraded
-		if config.IsOnPrague(blockNumber, lastBlockTime, blockTime) {
+		if config.IsInBSC() && config.IsOnPrague(blockNumber, lastBlockTime, blockTime) {
 			statedb.SetCode(params.HistoryStorageAddress, params.HistoryStorageCode, tracing.CodeChangeSystemContractUpgrade)
 			statedb.SetNonce(params.HistoryStorageAddress, 1, tracing.NonceChangeNewContract)
 			log.Info("Set code for HistoryStorageAddress", "blockNumber", blockNumber.Int64(), "blockTime", blockTime)

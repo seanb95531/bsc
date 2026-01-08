@@ -1883,8 +1883,12 @@ func TestDualHeapEviction(t *testing.T) {
 	pool, _ := setupPoolWithConfig(eip1559Config)
 	defer pool.Close()
 
-	pool.config.GlobalSlots = 2
-	pool.config.GlobalQueue = 2
+	// Use larger pool size to ensure floating heap has transactions.
+	// With pool size = 4, floatingCount = 4 * 1 / 5 = 0 (integer division),
+	// so no high fee cap transactions would be protected.
+	// With pool size = 20, floatingCount = 20 * 1 / 5 = 4, which is sufficient.
+	pool.config.GlobalSlots = 10
+	pool.config.GlobalQueue = 10
 	pool.config.OverflowPoolSlots = 1
 
 	var (
@@ -1901,7 +1905,7 @@ func TestDualHeapEviction(t *testing.T) {
 	}
 
 	add := func(urgent bool) {
-		for i := 0; i < 4; i++ {
+		for i := 0; i < 20; i++ {
 			var tx *types.Transaction
 			// Create a test accounts and fund it
 			key, _ := crypto.GenerateKey()
@@ -1922,8 +1926,8 @@ func TestDualHeapEviction(t *testing.T) {
 			pool.addRemotesSync([]*types.Transaction{tx})
 		}
 		pending, queued := pool.Stats()
-		if pending+queued != 4 {
-			t.Fatalf("transaction count mismatch: have %d, want %d, pending %d, queued %d, OverflowPool %d", pending+queued, 5, pending, queued, pool.localBufferPool.Size())
+		if pending+queued != 20 {
+			t.Fatalf("transaction count mismatch: have %d, want %d", pending+queued, 20)
 		}
 	}
 

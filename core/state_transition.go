@@ -565,7 +565,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	fee := new(uint256.Int).SetUint64(st.gasUsed())
 	fee.Mul(fee, effectiveTipU256)
 	// consensus engine is parlia
-	if st.evm.ChainConfig().Parlia != nil {
+	if st.evm.ChainConfig().IsInBSC() {
 		st.state.AddBalance(consensus.SystemAddress, fee, tracing.BalanceIncreaseRewardTransactionFee)
 		// add extra blob fee reward
 		if rules.IsCancun {

@@ -353,7 +353,6 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateScheme:           config.StateScheme,
 			PathSyncFlush:         config.PathSyncFlush,
 			JournalFilePath:       journalFilePath,
-			JournalFile:           config.JournalFileEnabled,
 			EnableIncr:            config.EnableIncrSnapshots,
 			IncrHistoryPath:       config.IncrSnapshotPath,
 			IncrHistory:           config.IncrSnapshotBlockInterval,

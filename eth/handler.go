@@ -965,7 +965,7 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 
 		signer = types.LatestSigner(h.chain.Config())
 		choice = newBroadcastChoice(h.nodeID, h.txBroadcastKey)
-		peers  = h.peers.all()
+		peers  = h.peers.allNonEVNPeers()
 	)
 
 	for _, tx := range txs {

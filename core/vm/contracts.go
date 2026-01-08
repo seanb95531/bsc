@@ -340,7 +340,14 @@ var PrecompiledContractsOsaka = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x10}): &bls12381MapG1{},
 	common.BytesToAddress([]byte{0x11}): &bls12381MapG2{},
 
-	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
+	common.BytesToAddress([]byte{0x64}): &tmHeaderValidate{},
+	common.BytesToAddress([]byte{0x65}): &iavlMerkleProofValidatePlato{},
+	common.BytesToAddress([]byte{0x66}): &blsSignatureVerify{},
+	common.BytesToAddress([]byte{0x67}): &cometBFTLightBlockValidateHertz{},
+	common.BytesToAddress([]byte{0x68}): &verifyDoubleSignEvidence{},
+	common.BytesToAddress([]byte{0x69}): &secp256k1SignatureRecover{},
+
+	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{eip7951: true},
 }
 
 // PrecompiledContractsP256Verify contains the precompiled Ethereum
@@ -1735,10 +1742,17 @@ func kZGToVersionedHash(kzg kzg4844.Commitment) common.Hash {
 
 // P256VERIFY (secp256r1 signature verification)
 // implemented as a native contract
-type p256Verify struct{}
+type p256Verify struct {
+	eip7951 bool
+}
 
 // RequiredGas returns the gas required to execute the precompiled contract
 func (c *p256Verify) RequiredGas(input []byte) uint64 {
+	const P256VerifyGasBeforeOsaka = 3450
+	if !c.eip7951 {
+		return P256VerifyGasBeforeOsaka
+	}
+
 	return params.P256VerifyGas
 }
 

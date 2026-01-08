@@ -890,7 +890,7 @@ func (p *BlobPool) Reset(oldHead, newHead *types.Header) {
 	p.updateStorageMetrics()
 
 	// Perform the conversion logic at the fork boundary
-	if !p.chain.Config().IsOsaka(oldHead.Number, oldHead.Time) && p.chain.Config().IsOsaka(newHead.Number, newHead.Time) {
+	if !p.chain.Config().IsOsaka(oldHead.Number, oldHead.Time) && p.chain.Config().IsOsaka(newHead.Number, newHead.Time) && p.chain.Config().IsNotInBSC() {
 		// Deep copy all indexed transaction metadata.
 		var (
 			ids = make(map[common.Address]map[uint64]uint64)
@@ -1209,7 +1209,7 @@ func (p *BlobPool) reinject(addr common.Address, txhash common.Hash) error {
 	// could theoretically halt a Geth node for ~1.2s by reorging per block. However,
 	// this attack is financially inefficient to execute.
 	head := p.head.Load()
-	if p.chain.Config().IsOsaka(head.Number, head.Time) && tx.BlobTxSidecar().Version == types.BlobSidecarVersion0 {
+	if p.chain.Config().IsOsaka(head.Number, head.Time) && tx.BlobTxSidecar().Version == types.BlobSidecarVersion0 && p.chain.Config().IsNotInBSC() {
 		if err := tx.BlobTxSidecar().ToV1(); err != nil {
 			log.Error("Failed to convert the legacy sidecar", "err", err)
 			return err
@@ -1674,7 +1674,7 @@ func (p *BlobPool) preCheck(tx *types.Transaction) error {
 		return err
 	}
 	// Before the Osaka fork, reject the blob txs with cell proofs
-	if !isOsaka {
+	if !isOsaka || p.chain.Config().IsInBSC() {
 		if tx.BlobTxSidecar().Version == types.BlobSidecarVersion0 {
 			return nil
 		} else {

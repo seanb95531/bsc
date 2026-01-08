@@ -107,7 +107,7 @@ func TestWaitDeployedCornerCases(t *testing.T) {
 			},
 		)
 		head, _     = backend.Client().HeaderByNumber(t.Context(), nil) // Should be child's, good enough
-		gasPrice    = new(big.Int).Add(head.BaseFee, big.NewInt(1))
+		gasPrice    = new(big.Int).Add(head.BaseFee, big.NewInt(params.GWei))
 		signer      = types.LatestSigner(params.AllDevChainProtocolChanges)
 		code        = common.FromHex("6060604052600a8060106000396000f360606040526008565b00")
 		ctx, cancel = context.WithCancel(t.Context())

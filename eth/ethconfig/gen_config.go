@@ -40,10 +40,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		LogHistory                uint64 `toml:",omitempty"`
 		LogNoHistory              bool   `toml:",omitempty"`
 		LogExportCheckpoints      string
-		StateHistory              uint64 `toml:",omitempty"`
-		StateScheme               string `toml:",omitempty"`
-		PathSyncFlush             bool   `toml:",omitempty"`
-		JournalFileEnabled        bool
+		StateHistory              uint64                 `toml:",omitempty"`
+		StateScheme               string                 `toml:",omitempty"`
+		PathSyncFlush             bool                   `toml:",omitempty"`
 		DisableTxIndexer          bool                   `toml:",omitempty"`
 		RequiredBlocks            map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck        bool                   `toml:"-"`
@@ -121,7 +120,6 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.StateHistory = c.StateHistory
 	enc.StateScheme = c.StateScheme
 	enc.PathSyncFlush = c.PathSyncFlush
-	enc.JournalFileEnabled = c.JournalFileEnabled
 	enc.DisableTxIndexer = c.DisableTxIndexer
 	enc.RequiredBlocks = c.RequiredBlocks
 	enc.SkipBcVersionCheck = c.SkipBcVersionCheck
@@ -200,10 +198,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		LogHistory                *uint64 `toml:",omitempty"`
 		LogNoHistory              *bool   `toml:",omitempty"`
 		LogExportCheckpoints      *string
-		StateHistory              *uint64 `toml:",omitempty"`
-		StateScheme               *string `toml:",omitempty"`
-		PathSyncFlush             *bool   `toml:",omitempty"`
-		JournalFileEnabled        *bool
+		StateHistory              *uint64                `toml:",omitempty"`
+		StateScheme               *string                `toml:",omitempty"`
+		PathSyncFlush             *bool                  `toml:",omitempty"`
 		DisableTxIndexer          *bool                  `toml:",omitempty"`
 		RequiredBlocks            map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck        *bool                  `toml:"-"`
@@ -333,9 +330,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.PathSyncFlush != nil {
 		c.PathSyncFlush = *dec.PathSyncFlush
-	}
-	if dec.JournalFileEnabled != nil {
-		c.JournalFileEnabled = *dec.JournalFileEnabled
 	}
 	if dec.DisableTxIndexer != nil {
 		c.DisableTxIndexer = *dec.DisableTxIndexer

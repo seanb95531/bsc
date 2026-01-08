@@ -245,7 +245,7 @@ func (f *chainFreezer) freeze(db ethdb.KeyValueStore, continueFreeze bool) {
 			last      uint64 // the last block to freeze
 
 			hash   common.Hash
-			number *uint64
+			number uint64
 			head   *types.Header
 			err    error
 		)
@@ -442,9 +442,9 @@ func (f *chainFreezer) freeze(db ethdb.KeyValueStore, continueFreeze bool) {
 		env, _ := f.freezeEnv.Load().(*ethdb.FreezerEnv)
 		// try prune blob data after cancun fork
 		if isCancun(env, head.Number, head.Time) {
-			f.tryPruneBlobAncientTable(env, *number)
+			f.tryPruneBlobAncientTable(env, number)
 		}
-		f.tryPruneHistoryBlock(*number)
+		f.tryPruneHistoryBlock(number)
 
 		// TODO(galaio): Temporarily comment that the current BSC is suitable for small-volume writes,
 		// and then the large-volume mode will be enabled after optimizing the freeze performance of ancient.

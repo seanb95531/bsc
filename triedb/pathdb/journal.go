@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"time"
 
@@ -53,130 +52,19 @@ var (
 // - Version 3: a flag has been added to indicate whether the storage slot key is the raw key or a hash
 const journalVersion uint64 = 3
 
-type JournalWriter interface {
-	io.Writer
-
-	Close()
-	Size() uint64
-}
-
-type JournalReader interface {
-	io.Reader
-	Close()
-}
-
-type JournalFileWriter struct {
-	file *os.File
-}
-
-type JournalFileReader struct {
-	file *os.File
-}
-
-type JournalKVWriter struct {
-	journalBuf bytes.Buffer
-	diskdb     ethdb.Database
-}
-
-type JournalKVReader struct {
-	journalBuf *bytes.Buffer
-}
-
-// Write appends b directly to the encoder output.
-func (fw *JournalFileWriter) Write(b []byte) (int, error) {
-	return fw.file.Write(b)
-}
-
-func (fw *JournalFileWriter) Close() {
-	fw.file.Close()
-}
-
-func (fw *JournalFileWriter) Size() uint64 {
-	if fw.file == nil {
-		return 0
-	}
-	fileInfo, err := fw.file.Stat()
-	if err != nil {
-		log.Crit("Failed to stat journal", "err", err)
-	}
-	return uint64(fileInfo.Size())
-}
-
-func (kw *JournalKVWriter) Write(b []byte) (int, error) {
-	return kw.journalBuf.Write(b)
-}
-
-func (kw *JournalKVWriter) Close() {
-	rawdb.WriteTrieJournal(kw.diskdb, kw.journalBuf.Bytes())
-	kw.journalBuf.Reset()
-}
-
-func (kw *JournalKVWriter) Size() uint64 {
-	return uint64(kw.journalBuf.Len())
-}
-
-func (fr *JournalFileReader) Read(p []byte) (n int, err error) {
-	return fr.file.Read(p)
-}
-
-func (fr *JournalFileReader) Close() {
-	fr.file.Close()
-}
-
-func (kr *JournalKVReader) Read(p []byte) (n int, err error) {
-	return kr.journalBuf.Read(p)
-}
-
-func (kr *JournalKVReader) Close() {
-}
-
-func newJournalWriter(file string, db ethdb.Database, journalType JournalType) JournalWriter {
-	if journalType == JournalKVType {
-		log.Info("New journal writer for journal kv")
-		return &JournalKVWriter{
-			diskdb: db,
-		}
-	} else {
-		log.Info("New journal writer for journal file", "path", file)
-		fd, err := os.OpenFile(file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return nil
-		}
-		return &JournalFileWriter{
-			file: fd,
-		}
-	}
-}
-
-func newJournalReader(file string, db ethdb.Database, journalType JournalType) (JournalReader, error) {
-	if journalType == JournalKVType {
-		log.Info("New journal reader for journal kv")
-		journal := rawdb.ReadTrieJournal(db)
-		if len(journal) == 0 {
-			return nil, errMissJournal
-		}
-		return &JournalKVReader{
-			journalBuf: bytes.NewBuffer(journal),
-		}, nil
-	} else {
-		log.Info("New journal reader for journal file", "path", file)
-		fd, err := os.Open(file)
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, errMissJournal
-		}
-		if err != nil {
-			return nil, err
-		}
-		return &JournalFileReader{
-			file: fd,
-		}, nil
-	}
-}
-
 // loadJournal tries to parse the layer journal from the disk.
 func (db *Database) loadJournal(diskRoot common.Hash) (layer, error) {
 	var reader io.Reader
 	if path := db.journalPath(); path != "" && common.FileExist(path) {
+		// If a journal file is specified, read it from there
+		log.Info("Load database journal from file", "path", path)
+		f, err := os.OpenFile(path, os.O_RDONLY, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read journal file %s: %w", path, err)
+		}
+		defer f.Close()
+		reader = f
+	} else if path := db.config.JournalFilePath; path != "" && common.FileExist(path) { // TODO(Nathan): delete this branch in v1.8.x
 		// If a journal file is specified, read it from there
 		log.Info("Load database journal from file", "path", path)
 		f, err := os.OpenFile(path, os.O_RDONLY, 0644)
@@ -359,7 +247,6 @@ func (db *Database) loadDiffLayer(parent layer, r *rlp.Stream) (layer, error) {
 	if err := stateSet.decode(r); err != nil {
 		return nil, err
 	}
-
 	return db.loadDiffLayer(newDiffLayer(parent, root, parent.stateID()+1, block, &nodes, &stateSet), r)
 }
 
@@ -429,10 +316,6 @@ func (dl *diffLayer) journal(w io.Writer) error {
 //
 // The supplied root must be a valid trie hash value.
 func (db *Database) Journal(root common.Hash) error {
-	// Run the journaling
-	db.lock.Lock()
-	defer db.lock.Unlock()
-
 	// Retrieve the head layer to journal from.
 	l := db.tree.get(root)
 	if l == nil {
@@ -450,6 +333,10 @@ func (db *Database) Journal(root common.Hash) error {
 		return err
 	}
 	start := time.Now()
+
+	// Run the journaling
+	db.lock.Lock()
+	defer db.lock.Unlock()
 
 	// Short circuit if the database is in read only mode.
 	if db.readOnly {

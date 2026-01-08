@@ -799,7 +799,7 @@ func (c *ChainConfig) Description() string {
 	}
 	banner += fmt.Sprintf("Chain ID:  %v (%s)\n", c.ChainID, network)
 	switch {
-	case c.Parlia != nil:
+	case c.IsInBSC():
 		banner += "Consensus: Parlia (proof-of-staked--authority)\n"
 	case c.Ethash != nil:
 		banner += "Consensus: Beacon (proof-of-stake), merged from Ethash (proof-of-work)\n"
@@ -821,7 +821,7 @@ func (c *ChainConfig) String() string {
 		engine = c.Ethash
 	case c.Clique != nil:
 		engine = c.Clique
-	case c.Parlia != nil:
+	case c.IsInBSC():
 		engine = c.Parlia
 	default:
 		engine = "unknown"
@@ -1335,6 +1335,14 @@ func (c *ChainConfig) IsOnPrague(currentBlockNumber *big.Int, lastBlockTime uint
 	return !c.IsPrague(lastBlockNumber, lastBlockTime) && c.IsPrague(currentBlockNumber, currentBlockTime)
 }
 
+func (c *ChainConfig) IsInBSC() bool {
+	return c.Parlia != nil
+}
+
+func (c *ChainConfig) IsNotInBSC() bool {
+	return c.Parlia == nil
+}
+
 // IsLorentz returns whether time is either equal to the Lorentz fork time or greater.
 func (c *ChainConfig) IsLorentz(num *big.Int, time uint64) bool {
 	return c.IsLondon(num) && isTimestampForked(c.LorentzTime, time)
@@ -1488,7 +1496,7 @@ func (c *ChainConfig) CheckCompatible(newcfg *ChainConfig, height uint64, time u
 // to guarantee that forks can be implemented in a different order than on official networks
 func (c *ChainConfig) CheckConfigForkOrder() error {
 	// skip checking for non-Parlia egine
-	if c.Parlia == nil {
+	if c.IsNotInBSC() {
 		return nil
 	}
 	type fork struct {
@@ -1839,7 +1847,7 @@ func (c *ChainConfig) BlobConfig(fork forks.Fork) *BlobConfig {
 		return c.BlobScheduleConfig.BPO1
 	case forks.Osaka:
 		return c.BlobScheduleConfig.Osaka
-	case forks.Prague:
+	case forks.Fermi, forks.Maxwell, forks.Lorentz, forks.Prague:
 		return c.BlobScheduleConfig.Prague
 	case forks.Cancun:
 		return c.BlobScheduleConfig.Cancun
@@ -1855,6 +1863,12 @@ func (c *ChainConfig) ActiveSystemContracts(time uint64) map[string]common.Addre
 	active := make(map[string]common.Address)
 	if fork >= forks.Osaka {
 		// no new system contracts
+	}
+	if c.IsInBSC() {
+		if fork >= forks.Prague {
+			active["HISTORY_STORAGE_ADDRESS"] = HistoryStorageAddress
+		}
+		return active
 	}
 	if fork >= forks.Prague {
 		active["CONSOLIDATION_REQUEST_PREDEPLOY_ADDRESS"] = ConsolidationQueueAddress
@@ -2063,7 +2077,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		chainID = new(big.Int)
 	}
 	// disallow setting Merge out of order
-	isMerge = isMerge && c.IsLondon(num)
+	isMerge = isMerge && c.IsLondon(num) // always false in BSC
 	isVerkle := isMerge && c.IsVerkle(num, timestamp)
 	return Rules{
 		ChainID:          new(big.Int).Set(chainID),
@@ -2086,20 +2100,20 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsPlato:          c.IsPlato(num),
 		IsHertz:          c.IsHertz(num),
 		IsHertzfix:       c.IsHertzfix(num),
-		IsShanghai:       isMerge && c.IsShanghai(num, timestamp),
+		IsShanghai:       (isMerge || c.IsInBSC()) && c.IsShanghai(num, timestamp),
 		IsKepler:         c.IsKepler(num, timestamp),
 		IsFeynman:        c.IsFeynman(num, timestamp),
-		IsCancun:         isMerge && c.IsCancun(num, timestamp),
+		IsCancun:         (isMerge || c.IsInBSC()) && c.IsCancun(num, timestamp),
 		IsHaber:          c.IsHaber(num, timestamp),
 		IsBohr:           c.IsBohr(num, timestamp),
 		IsPascal:         c.IsPascal(num, timestamp),
-		IsPrague:         isMerge && c.IsPrague(num, timestamp),
+		IsPrague:         (isMerge || c.IsInBSC()) && c.IsPrague(num, timestamp),
 		IsLorentz:        c.IsLorentz(num, timestamp),
 		IsMaxwell:        c.IsMaxwell(num, timestamp),
 		IsFermi:          c.IsFermi(num, timestamp),
-		IsOsaka:          isMerge && c.IsOsaka(num, timestamp),
+		IsOsaka:          (isMerge || c.IsInBSC()) && c.IsOsaka(num, timestamp),
 		IsMendel:         c.IsMendel(num, timestamp),
-		IsAmsterdam:      isMerge && c.IsAmsterdam(num, timestamp),
+		IsAmsterdam:      (isMerge || c.IsInBSC()) && c.IsAmsterdam(num, timestamp),
 		IsVerkle:         c.IsVerkle(num, timestamp),
 		IsEIP4762:        isVerkle,
 	}

@@ -181,7 +181,6 @@ type BlockChainConfig struct {
 	NoTries               bool   // Insecure settings. Do not have any tries in databases if enabled.
 	PathSyncFlush         bool   // Whether sync flush the trienodebuffer of pathdb to disk.
 	JournalFilePath       string // The path to store journal file which is used in pathdb
-	JournalFile           bool   // Whether to use single file to store journal data in pathdb
 	EnableIncr            bool   // Flag whether the freezer db stores incremental block and state history
 	IncrHistoryPath       string // The path to store incremental block and chain files
 	IncrHistory           uint64 // Amount of block and state history stored in incremental freezer db
@@ -284,7 +283,6 @@ func (cfg *BlockChainConfig) triedbConfig(isVerkle bool) *triedb.Config {
 	if cfg.StateScheme == rawdb.PathScheme {
 		config.PathDB = &pathdb.Config{
 			JournalFilePath: cfg.JournalFilePath,
-			JournalFile:     cfg.JournalFile,
 			EnableIncr:      cfg.EnableIncr,
 			IncrHistoryPath: cfg.IncrHistoryPath,
 			IncrHistory:     cfg.IncrHistory,
@@ -1573,7 +1571,7 @@ func (bc *BlockChain) Stop() {
 					for !bc.triegc.Empty() {
 						triedb.Dereference(bc.triegc.PopItem())
 					}
-					if _, size, _, _ := triedb.Size(); size != 0 {
+					if _, size, _ := triedb.Size(); size != 0 {
 						log.Error("Dangling trie nodes after full cleanup")
 					}
 				}
@@ -1660,7 +1658,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	}
 	// check DA after cancun
 	lastBlk := blockChain[len(blockChain)-1]
-	if bc.chainConfig.Parlia != nil && bc.chainConfig.IsCancun(lastBlk.Number(), lastBlk.Time()) {
+	if bc.chainConfig.IsInBSC() && bc.chainConfig.IsCancun(lastBlk.Number(), lastBlk.Time()) {
 		if _, err := CheckDataAvailableInBatch(bc, blockChain); err != nil {
 			log.Debug("CheckDataAvailableInBatch", "err", err)
 			return 0, err
@@ -1968,8 +1966,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 	// If we exceeded our memory allowance, flush matured singleton nodes to disk
 	var (
-		_, nodes, _, imgs = bc.triedb.Size()
-		limit             = common.StorageSize(bc.cfg.TrieDirtyLimit) * 1024 * 1024
+		_, nodes, imgs = bc.triedb.Size()
+		limit          = common.StorageSize(bc.cfg.TrieDirtyLimit) * 1024 * 1024
 	)
 	if nodes > limit || imgs > 4*1024*1024 {
 		bc.triedb.Cap(limit - ethdb.IdealBatchSize)
@@ -2206,7 +2204,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 	}()
 
 	// check block data available first
-	if bc.chainConfig.Parlia != nil {
+	if bc.chainConfig.IsInBSC() {
 		if index, err := CheckDataAvailableInBatch(bc, chain); err != nil {
 			return nil, index, err
 		}
@@ -2389,8 +2387,8 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		if bc.snaps != nil {
 			snapDiffItems, snapBufItems, _ = bc.snaps.Size()
 		}
-		trieDiffNodes, trieBufNodes, trieImmutableBufNodes, _ := bc.triedb.Size()
-		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, trieImmutableBufNodes, res.status == CanonStatTy)
+		trieDiffNodes, trieBufNodes, _ := bc.triedb.Size()
+		stats.report(chain, it.index, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, res.status == CanonStatTy)
 
 		// Print confirmation that a future fork is scheduled, but not yet active.
 		bc.logForkReadiness(block)
@@ -2637,19 +2635,17 @@ func (bc *BlockChain) ProcessBlock(parentRoot common.Hash, block *types.Block, s
 	proctime := time.Since(startTime) // processing + validation + cross validation
 
 	// Update the metrics touched during block processing and validation
-	if metrics.EnabledExpensive() {
-		accountReadTimer.Update(statedb.AccountReads) // Account reads are complete(in processing)
-		storageReadTimer.Update(statedb.StorageReads) // Storage reads are complete(in processing)
-		if statedb.AccountLoaded != 0 {
-			accountReadSingleTimer.Update(statedb.AccountReads / time.Duration(statedb.AccountLoaded))
-		}
-		if statedb.StorageLoaded != 0 {
-			storageReadSingleTimer.Update(statedb.StorageReads / time.Duration(statedb.StorageLoaded))
-		}
-		accountUpdateTimer.Update(statedb.AccountUpdates) // Account updates are complete(in validation)
-		storageUpdateTimer.Update(statedb.StorageUpdates) // Storage updates are complete(in validation)
-		accountHashTimer.Update(statedb.AccountHashes)    // Account hashes are complete(in validation)
+	accountReadTimer.Update(statedb.AccountReads) // Account reads are complete(in processing)
+	storageReadTimer.Update(statedb.StorageReads) // Storage reads are complete(in processing)
+	if statedb.AccountLoaded != 0 {
+		accountReadSingleTimer.Update(statedb.AccountReads / time.Duration(statedb.AccountLoaded))
 	}
+	if statedb.StorageLoaded != 0 {
+		storageReadSingleTimer.Update(statedb.StorageReads / time.Duration(statedb.StorageLoaded))
+	}
+	accountUpdateTimer.Update(statedb.AccountUpdates)                                 // Account updates are complete(in validation)
+	storageUpdateTimer.Update(statedb.StorageUpdates)                                 // Storage updates are complete(in validation)
+	accountHashTimer.Update(statedb.AccountHashes)                                    // Account hashes are complete(in validation)
 	triehash := statedb.AccountHashes                                                 // The time spent on tries hashing
 	trieUpdate := statedb.AccountUpdates + statedb.StorageUpdates                     // The time spent on tries update
 	blockExecutionTimer.Update(ptime - (statedb.AccountReads + statedb.StorageReads)) // The time spent on EVM processing
@@ -2676,12 +2672,10 @@ func (bc *BlockChain) ProcessBlock(parentRoot common.Hash, block *types.Block, s
 	}
 
 	// Update the metrics touched during block commit
-	if metrics.EnabledExpensive() {
-		accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them
-		storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
-		snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
-		triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
-	}
+	accountCommitTimer.Update(statedb.AccountCommits)   // Account commits are complete, we can mark them
+	storageCommitTimer.Update(statedb.StorageCommits)   // Storage commits are complete, we can mark them
+	snapshotCommitTimer.Update(statedb.SnapshotCommits) // Snapshot commits are complete, we can mark them
+	triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
 	blockWriteTimer.Update(time.Since(wstart) - max(statedb.AccountCommits, statedb.StorageCommits) /* concurrent */ - statedb.SnapshotCommits - statedb.TrieDBCommits)
 	elapsed := time.Since(startTime) + 1 // prevent zero division
 	blockInsertTimer.Update(elapsed)

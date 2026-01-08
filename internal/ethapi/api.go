@@ -2154,7 +2154,7 @@ func (api *TransactionAPI) FillTransaction(ctx context.Context, args Transaction
 
 func (api *TransactionAPI) currentBlobSidecarVersion() byte {
 	h := api.b.CurrentHeader()
-	if api.b.ChainConfig().IsOsaka(h.Number, h.Time) {
+	if api.b.ChainConfig().IsOsaka(h.Number, h.Time) && api.b.ChainConfig().IsNotInBSC() {
 		return types.BlobSidecarVersion1
 	}
 	return types.BlobSidecarVersion0

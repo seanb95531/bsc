@@ -220,8 +220,7 @@ func (btx *blobTxWithBlobsV1) tx() *BlobTx {
 func (btx *blobTxWithBlobsV1) assign(sc *BlobTxSidecar) error {
 	// NOTE(BSC): Upstream geth supports both Version 0 and 1 sidecars.
 	// BSC only supports Version 0, as EIP-7594 (cell proofs) is not enabled yet.
-	disableEIP7594 := true
-	if disableEIP7594 || btx.Version != BlobSidecarVersion1 {
+	if btx.Version != BlobSidecarVersion1 {
 		return fmt.Errorf("unsupported blob tx version %d", btx.Version)
 	}
 	sc.Version = BlobSidecarVersion1

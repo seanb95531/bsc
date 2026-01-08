@@ -1057,6 +1057,10 @@ func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *para
 		if sc == nil {
 			return errors.New("blob transaction without blobs in miner")
 		}
+
+		if sc.Version == types.BlobSidecarVersion1 {
+			return errors.New("cell proof is not supported yet")
+		}
 		// Checking against blob gas limit: It's kind of ugly to perform this check here, but there
 		// isn't really a better place right now. The blob gas limit is checked at block validation time
 		// and not during execution. This means core.ApplyTransaction will not return an error if the

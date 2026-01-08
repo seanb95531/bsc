@@ -194,5 +194,7 @@ func NewAPI(s *Syncer) *API {
 
 // Sync initiates a full sync to the target block hash.
 func (api *API) Sync(target common.Hash) error {
-	return api.s.Sync(target)
+	// TODO(Nathan): Re-enable this functionality once supported.
+	return errors.New("syncing to a specific target is currently not supported by BSC")
+	// return api.s.Sync(target)
 }

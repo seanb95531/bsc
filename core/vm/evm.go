@@ -97,9 +97,6 @@ type EVM struct {
 	// StateDB gives access to the underlying state
 	StateDB StateDB
 
-	// table holds the opcode specific handlers
-	table *JumpTable
-
 	// depth is the current call stack
 	depth int
 

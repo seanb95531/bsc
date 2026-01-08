@@ -26,8 +26,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ethereum/go-ethereum/metrics"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
@@ -81,11 +79,10 @@ func (m *mutation) isDelete() bool {
 // must be created with new root and updated database for accessing post-
 // commit states.
 type StateDB struct {
-	db             Database
-	prefetcherLock sync.Mutex
-	prefetcher     *triePrefetcher
-	reader         Reader
-	trie           Trie // it's resolved on first access
+	db         Database
+	prefetcher *triePrefetcher
+	reader     Reader
+	trie       Trie // it's resolved on first access
 
 	// originalRoot is the pre-state root, before any changes were made.
 	// It will be updated when the Commit is called.
@@ -214,25 +211,6 @@ func (s *StateDB) SetNeedBadSharedStorage(needBadSharedStorage bool) {
 	s.needBadSharedStorage = needBadSharedStorage
 }
 
-// In mining mode, we will try multi-fillTransactions to get the most profitable one.
-// StateDB will be created for each fillTransactions with same block height.
-// Share a single triePrefetcher to avoid too much prefetch routines.
-func (s *StateDB) TransferPrefetcher(prev *StateDB) {
-	if prev == nil {
-		return
-	}
-	var fetcher *triePrefetcher
-
-	prev.prefetcherLock.Lock()
-	fetcher = prev.prefetcher
-	prev.prefetcher = nil
-	prev.prefetcherLock.Unlock()
-
-	s.prefetcherLock.Lock()
-	s.prefetcher = fetcher
-	s.prefetcherLock.Unlock()
-}
-
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
 // state trie concurrently while the state is mutated so that when we reach the
 // commit phase, most of the needed data is already hot.
@@ -269,13 +247,11 @@ func (s *StateDB) StopPrefetcher() {
 	if s.db.NoTries() {
 		return
 	}
-	s.prefetcherLock.Lock()
 	if s.prefetcher != nil {
 		s.prefetcher.terminate(false)
 		s.prefetcher.report()
 		s.prefetcher = nil
 	}
-	s.prefetcherLock.Unlock()
 }
 
 // Mark that the block is processed by diff layer
@@ -714,9 +690,7 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil
 	}
-	if metrics.EnabledExpensive() {
-		s.AccountReads += time.Since(start)
-	}
+	s.AccountReads += time.Since(start)
 
 	// Short circuit if the account is not found
 	if acct == nil {
@@ -799,17 +773,6 @@ func (s *StateDB) StateForPrefetch() *StateDB {
 	return state
 }
 
-// Copy creates a deep, independent copy of the state.
-// Snapshots of the copied state cannot be applied to the copy.
-func (s *StateDB) Copy() *StateDB {
-	return s.copyInternal(false)
-}
-
-// It is mainly for state prefetcher to do trie prefetch right now.
-func (s *StateDB) CopyDoPrefetch() *StateDB {
-	return s.copyInternal(true)
-}
-
 func (s *StateDB) TransferBlockAccessList(prev *StateDB) {
 	if prev == nil {
 		return
@@ -818,20 +781,20 @@ func (s *StateDB) TransferBlockAccessList(prev *StateDB) {
 	prev.blockAccessList = nil
 }
 
-// If doPrefetch is true, it tries to reuse the prefetcher, the copied StateDB will do active trie prefetch.
-// otherwise, just do inactive copy trie prefetcher.
-func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
+// Copy creates a deep, independent copy of the state.
+// Snapshots of the copied state cannot be applied to the copy.
+func (s *StateDB) Copy() *StateDB {
 	// Copy all the basic fields, initialize the memory ones
 	state := &StateDB{
-		db:     s.db,
-		reader: s.reader,
-		// expectedRoot: s.expectedRoot,
+		db:                   s.db,
+		reader:               s.reader,
 		originalRoot:         s.originalRoot,
+		expectedRoot:         s.expectedRoot,
+		needBadSharedStorage: s.needBadSharedStorage,
 		stateObjects:         make(map[common.Address]*stateObject, len(s.stateObjects)),
 		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,
-		needBadSharedStorage: s.needBadSharedStorage,
 		refund:               s.refund,
 		thash:                s.thash,
 		txIndex:              s.txIndex,
@@ -880,7 +843,6 @@ func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 		}
 		state.logs[hash] = cpy
 	}
-
 	return state
 }
 
@@ -966,8 +928,11 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// If there was a trie prefetcher operating, terminate it async so that the
 	// individual storage tries can be updated as soon as the disk load finishes.
 	if s.prefetcher != nil {
-		// s.prefetcher.terminate(true)
-		defer s.StopPrefetcher() // not async now!
+		s.prefetcher.terminate(true)
+		defer func() {
+			s.prefetcher.report()
+			s.prefetcher = nil // Pre-byzantium, unset any used up prefetcher
+		}()
 	}
 	// Process all storage updates concurrently. The state object update root
 	// method will internally call a blocking trie fetch from the prefetcher,
@@ -976,9 +941,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		start   time.Time
 		workers errgroup.Group
 	)
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	start = time.Now()
 	if s.db.TrieDB().IsVerkle() {
 		// Whilst MPT storage tries are independent, Verkle has one single trie
 		// for all the accounts and all the storage slots merged together. The
@@ -1057,9 +1020,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		}
 	}
 	workers.Wait()
-	if metrics.EnabledExpensive() {
-		s.StorageUpdates += time.Since(start)
-	}
+	s.StorageUpdates += time.Since(start)
 
 	// Now we're about to start to write changes to the trie. The trie is so far
 	// _untouched_. We can check with the prefetcher, if it can give us a trie
@@ -1068,9 +1029,7 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 	// Don't check prefetcher if verkle trie has been used. In the context of verkle,
 	// only a single trie is used for state hashing. Replacing a non-nil verkle tree
 	// here could result in losing uncommitted changes from storage.
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	start = time.Now()
 	if s.prefetcher != nil {
 		if trie := s.prefetcher.trie(common.Hash{}, s.originalRoot); trie == nil {
 			log.Debug("Failed to retrieve account pre-fetcher trie")
@@ -1110,18 +1069,14 @@ func (s *StateDB) IntermediateRoot(deleteEmptyObjects bool) common.Hash {
 		s.deleteStateObject(deletedAddr)
 		s.AccountDeleted += 1
 	}
-	if metrics.EnabledExpensive() {
-		s.AccountUpdates += time.Since(start)
-	}
+	s.AccountUpdates += time.Since(start)
 
 	if s.prefetcher != nil && len(usedAddrs) > 0 {
 		s.prefetcher.used(common.Hash{}, s.originalRoot, usedAddrs, nil)
 	}
 
-	if metrics.EnabledExpensive() {
-		// Track the amount of time wasted on hashing the account trie
-		defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
-	}
+	// Track the amount of time wasted on hashing the account trie
+	defer func(start time.Time) { s.AccountHashes += time.Since(start) }(time.Now())
 
 	hash := s.trie.Hash()
 
@@ -1344,7 +1299,6 @@ func (s *StateDB) GetTrie() Trie {
 func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNumber uint64) (*stateUpdate, error) {
 	// Short circuit in case any database failure occurred earlier.
 	if s.dbErr != nil {
-		s.StopPrefetcher()
 		return nil, fmt.Errorf("commit aborted due to earlier error: %v", s.dbErr)
 	}
 	// Finalize any pending changes and merge everything into the tries
@@ -1441,9 +1395,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 		if err := merge(set); err != nil {
 			return err
 		}
-		if metrics.EnabledExpensive() {
-			s.AccountCommits = time.Since(start)
-		}
+		s.AccountCommits = time.Since(start)
 		return nil
 	})
 	// Schedule each of the storage tries that need to be updated, so they can
@@ -1474,9 +1426,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNum
 			}
 			lock.Lock()
 			updates[obj.addrHash] = update
-			if metrics.EnabledExpensive() {
-				s.StorageCommits = time.Since(start) // overwrite with the longest storage commit runtime
-			}
+			s.StorageCommits = time.Since(start) // overwrite with the longest storage commit runtime
 			lock.Unlock()
 			return nil
 		})
@@ -1559,9 +1509,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			if err := snap.Cap(ret.root, snap.CapLimit()); err != nil {
 				log.Warn("Failed to cap snapshot tree", "root", ret.root, "layers", TriesInMemory, "err", err)
 			}
-			if metrics.EnabledExpensive() {
-				s.SnapshotCommits += time.Since(start)
-			}
+			s.SnapshotCommits += time.Since(start)
 		}
 		// If trie database is enabled, commit the state update as a new layer
 		if db := s.db.TrieDB(); db != nil && !s.db.NoTries() {
@@ -1569,9 +1517,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			if err := db.Update(ret.root, ret.originRoot, block, ret.nodes, ret.stateSet()); err != nil {
 				return nil, err
 			}
-			if metrics.EnabledExpensive() {
-				s.TrieDBCommits += time.Since(start)
-			}
+			s.TrieDBCommits += time.Since(start)
 		}
 	}
 	s.reader, _ = s.db.Reader(s.originalRoot)

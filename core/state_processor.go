@@ -157,7 +157,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	// Read requests if Prague is enabled.
 	var requests [][]byte
-	if config.IsPrague(block.Number(), block.Time()) && config.Parlia == nil {
+	if config.IsPrague(block.Number(), block.Time()) && config.IsNotInBSC() {
 		var allCommonLogs []*types.Log
 		for _, receipt := range receipts {
 			allCommonLogs = append(allCommonLogs, receipt.Logs...)
@@ -293,7 +293,7 @@ func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *
 func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 	// Return immediately if beaconRoot equals the zero hash when using the Parlia engine.
 	if beaconRoot == (common.Hash{}) {
-		if chainConfig := evm.ChainConfig(); chainConfig != nil && chainConfig.Parlia != nil {
+		if chainConfig := evm.ChainConfig(); chainConfig != nil && chainConfig.IsInBSC() {
 			return
 		}
 	}

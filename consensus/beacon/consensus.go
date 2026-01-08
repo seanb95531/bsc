@@ -61,8 +61,7 @@ var (
 // is only used for necessary consensus checks. The legacy consensus engine can be any
 // engine implements the consensus interface (except the beacon itself).
 type Beacon struct {
-	ethone   consensus.Engine // Original consensus engine used in eth1, e.g. ethash or clique
-	ttdblock *uint64          // Merge block-number for testchain generation without TTDs
+	ethone consensus.Engine // Original consensus engine used in eth1, e.g. ethash or clique
 }
 
 // New creates a consensus engine with the given embedded eth1 engine.

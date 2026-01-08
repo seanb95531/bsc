@@ -580,15 +580,14 @@ func (dl *diskLayer) revert(h *stateHistory) (*diskLayer, error) {
 }
 
 // size returns the approximate size of cached nodes in the disk layer.
-func (dl *diskLayer) size() (common.StorageSize, common.StorageSize) {
+func (dl *diskLayer) size() common.StorageSize {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
 	if dl.stale {
-		return 0, 0
+		return 0
 	}
-	dirtyNodes, dirtyimmutableNodes := dl.buffer.size(), 0
-	return common.StorageSize(dirtyNodes), common.StorageSize(dirtyimmutableNodes)
+	return common.StorageSize(dl.buffer.size())
 }
 
 // resetCache releases the memory held by clean cache to prevent memory leak.
