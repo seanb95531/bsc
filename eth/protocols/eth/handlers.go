@@ -549,19 +549,12 @@ func handleTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txs); err != nil {
 		return err
 	}
-	// Duplicate transactions are not allowed
-	seen := make(map[common.Hash]struct{})
 	for i, tx := range txs {
 		// Validate and mark the remote transaction
 		if tx == nil {
 			return fmt.Errorf("Transactions: transaction %d is nil", i)
 		}
-		hash := tx.Hash()
-		if _, exists := seen[hash]; exists {
-			return fmt.Errorf("Transactions: multiple copies of the same hash %v", hash)
-		}
-		seen[hash] = struct{}{}
-		peer.markTransaction(hash)
+		peer.markTransaction(tx.Hash())
 	}
 	return backend.Handle(peer, &txs)
 }
@@ -576,19 +569,12 @@ func handlePooledTransactions(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&txs); err != nil {
 		return err
 	}
-	// Duplicate transactions are not allowed
-	seen := make(map[common.Hash]struct{})
 	for i, tx := range txs.PooledTransactionsResponse {
 		// Validate and mark the remote transaction
 		if tx == nil {
 			return fmt.Errorf("PooledTransactions: transaction %d is nil", i)
 		}
-		hash := tx.Hash()
-		if _, exists := seen[hash]; exists {
-			return fmt.Errorf("PooledTransactions: multiple copies of the same hash %v", hash)
-		}
-		seen[hash] = struct{}{}
-		peer.markTransaction(hash)
+		peer.markTransaction(tx.Hash())
 	}
 	requestTracker.Fulfil(peer.id, peer.version, PooledTransactionsMsg, txs.RequestId)
 
