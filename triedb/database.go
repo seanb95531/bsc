@@ -489,7 +489,7 @@ func (db *Database) SetStateGenerator() {
 	pdb.SetStateGenerator()
 }
 
-// RepairIncrStore is used to repair incr store.
+// GetStartBlock returns the start block number.
 func (db *Database) GetStartBlock() (uint64, error) {
 	pdb, ok := db.backend.(*pathdb.Database)
 	if !ok {
