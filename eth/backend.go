@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -404,11 +405,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// Initialize filtermaps log index.
+	// Auto-enable checkpoint file
+	checkpointFile := filepath.Join(stack.DataDir(), "geth", "filtermap_checkpoints.json")
+
 	fmConfig := filtermaps.Config{
-		History:        config.LogHistory,
-		Disabled:       config.LogNoHistory,
-		ExportFileName: config.LogExportCheckpoints,
-		HashScheme:     config.StateScheme == rawdb.HashScheme,
+		History:            config.LogHistory,
+		Disabled:           config.LogNoHistory,
+		CheckpointFileName: checkpointFile,
+		HashScheme:         config.StateScheme == rawdb.HashScheme,
 	}
 	chainView := eth.newChainView(eth.blockchain.CurrentBlock())
 	historyCutoff, _ := eth.blockchain.HistoryPruningCutoff()

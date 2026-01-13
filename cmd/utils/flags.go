@@ -438,10 +438,11 @@ var (
 		Usage:    "Do not maintain log search index",
 		Category: flags.StateCategory,
 	}
+	// Deprecated Jan 2025
 	LogExportCheckpointsFlag = &cli.StringFlag{
 		Name:     "history.logs.export",
-		Usage:    "Export checkpoints to file in go source file format",
-		Category: flags.StateCategory,
+		Usage:    "Deprecated, checkpoint file is auto-enabled at datadir/geth/filtermap_checkpoints.json",
+		Category: flags.DeprecatedCategory,
 		Value:    "",
 	}
 	// Beacon client light sync settings
@@ -2219,6 +2220,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(LogExportCheckpointsFlag.Name) {
 		cfg.LogExportCheckpoints = ctx.String(LogExportCheckpointsFlag.Name)
+		log.Warn("Flag --history.logs.export is deprecated, checkpoint file is auto-enabled at datadir/geth/filtermap_checkpoints.json")
 	}
 	if ctx.String(GCModeFlag.Name) == "archive" && cfg.BlockHistory != 0 {
 		cfg.BlockHistory = 0
