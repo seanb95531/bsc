@@ -174,10 +174,6 @@ func (evm *EVM) UseBaseInterpreter() {
 	evm.interpreter = evm.baseInterpreter
 }
 
-func (evm *EVM) GetInterpreter() *EVMInterpreter {
-	return evm.interpreter
-}
-
 // SetPrecompiles sets the precompiled contracts for the EVM.
 // This method is only used through RPC calls.
 // It is not thread-safe.
@@ -208,6 +204,11 @@ func (evm *EVM) Cancel() {
 // Cancelled returns true if Cancel has been called
 func (evm *EVM) Cancelled() bool {
 	return evm.abort.Load()
+}
+
+// Interpreter returns the current interpreter
+func (evm *EVM) Interpreter() *EVMInterpreter {
+	return evm.interpreter
 }
 
 func isSystemCall(caller common.Address) bool {

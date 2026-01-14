@@ -261,13 +261,12 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		overrides.OverrideMendel = config.OverrideMendel
 	}
 	if config.OverrideBPO1 != nil {
+		chainConfig.BPO1Time = config.OverrideBPO1
 		overrides.OverrideBPO1 = config.OverrideBPO1
 	}
 	if config.OverrideBPO2 != nil {
+		chainConfig.BPO2Time = config.OverrideBPO2
 		overrides.OverrideBPO2 = config.OverrideBPO2
-	}
-	if config.OverrideVerkle != nil {
-		overrides.OverrideVerkle = config.OverrideVerkle
 	}
 	if config.OverrideVerkle != nil {
 		chainConfig.VerkleTime = config.OverrideVerkle

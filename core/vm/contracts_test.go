@@ -59,7 +59,7 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
 
-	common.BytesToAddress([]byte{0x01, 0x00}): &p256Verify{eip7951: true},
+	common.BytesToAddress([]byte{0x1, 0x00}):  &p256Verify{eip7951: true},
 	common.BytesToAddress([]byte{0x0f, 0x0a}): &bls12381G1Add{},
 	common.BytesToAddress([]byte{0x0f, 0x0b}): &bls12381G1MultiExp{},
 	common.BytesToAddress([]byte{0x0f, 0x0c}): &bls12381G2Add{},

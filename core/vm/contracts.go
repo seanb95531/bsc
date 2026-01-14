@@ -281,7 +281,7 @@ var PrecompiledContractsHaber = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x68}): &verifyDoubleSignEvidence{},
 	common.BytesToAddress([]byte{0x69}): &secp256k1SignatureRecover{},
 
-	common.BytesToAddress([]byte{0x01, 0x00}): &p256Verify{},
+	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
 }
 
 // PrecompiledContractsPrague contains the set of pre-compiled Ethereum
@@ -312,7 +312,7 @@ var PrecompiledContractsPrague = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x68}): &verifyDoubleSignEvidence{},
 	common.BytesToAddress([]byte{0x69}): &secp256k1SignatureRecover{},
 
-	common.BytesToAddress([]byte{0x01, 0x00}): &p256Verify{},
+	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
 }
 
 var PrecompiledContractsBLS = PrecompiledContractsPrague
