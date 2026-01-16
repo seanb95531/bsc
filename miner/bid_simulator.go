@@ -532,7 +532,7 @@ func (b *bidSimulator) getBlockInterval(parentHeader *types.Header) uint64 {
 
 // checkIfBidExceedsTxGasLimit checks whether any transaction in the bid exceeds the max txn gas.
 func (b *bidSimulator) checkIfBidExceedsTxGasLimit(bid *types.Bid) error {
-	if b.txMaxGas < params.MinTxGasLimitCap {
+	if b.txMaxGas < params.MaxTxGas {
 		return nil
 	}
 	// Scan all txs in the bid to check if any transaction exceeds txGasLimit.
@@ -1056,6 +1056,10 @@ func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *para
 		sc = types.NewBlobSidecarFromTx(tx)
 		if sc == nil {
 			return errors.New("blob transaction without blobs in miner")
+		}
+
+		if sc.Version == types.BlobSidecarVersion1 {
+			return errors.New("cell proof is not supported yet")
 		}
 		// Checking against blob gas limit: It's kind of ugly to perform this check here, but there
 		// isn't really a better place right now. The blob gas limit is checked at block validation time

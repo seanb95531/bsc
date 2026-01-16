@@ -28,7 +28,7 @@ import (
 const codeBitmapCacheSize = 2000
 
 var (
-	codeBitmapCache = lru.NewCache[common.Hash, bitvec](codeBitmapCacheSize)
+	codeBitmapCache = lru.NewCache[common.Hash, BitVec](codeBitmapCacheSize)
 
 	contractCodeBitmapHitMeter  = metrics.NewRegisteredMeter("vm/contract/code/bitmap/hit", nil)
 	contractCodeBitmapMissMeter = metrics.NewRegisteredMeter("vm/contract/code/bitmap/miss", nil)
@@ -43,8 +43,8 @@ type Contract struct {
 	caller  common.Address
 	address common.Address
 
-	jumpdests map[common.Hash]bitvec // Aggregated result of JUMPDEST analysis.
-	analysis  bitvec                 // Locally cached result of JUMPDEST analysis
+	jumpDests JumpDestCache // Aggregated result of JUMPDEST analysis.
+	analysis  BitVec        // Locally cached result of JUMPDEST analysis
 
 	Code     []byte
 	CodeHash common.Hash
@@ -55,10 +55,11 @@ type Contract struct {
 	IsDeployment bool
 	IsSystemCall bool
 
-	Gas            uint64
-	value          *uint256.Int
+	Gas   uint64
+	value *uint256.Int
+
 	optimized      bool
-	codeBitmapFunc func(code []byte) bitvec
+	codeBitmapFunc func(code []byte) BitVec
 }
 
 func (c *Contract) validJumpdest(dest *uint256.Int) bool {
@@ -87,7 +88,7 @@ func (c *Contract) isCode(udest uint64) bool {
 	// contracts ( not temporary initcode), we store the analysis in a map
 	if c.CodeHash != (common.Hash{}) {
 		// Does parent context have the analysis?
-		analysis, exist := c.jumpdests[c.CodeHash]
+		analysis, exist := c.jumpDests.Load(c.CodeHash)
 		if !exist {
 			if cached, ok := codeBitmapCache.Get(c.CodeHash); ok {
 				contractCodeBitmapHitMeter.Mark(1)
@@ -98,12 +99,12 @@ func (c *Contract) isCode(udest uint64) bool {
 					analysis = c.codeBitmapFunc(c.Code)
 					compiler.StoreBitvec(c.CodeHash, analysis)
 				}
-				c.jumpdests[c.CodeHash] = analysis
+				c.jumpDests.Store(c.CodeHash, analysis)
 			} else {
 				// Do the analysis and save in parent context
 				// We do not need to store it in c.analysis
 				analysis = c.codeBitmapFunc(c.Code)
-				c.jumpdests[c.CodeHash] = analysis
+				c.jumpDests.Store(c.CodeHash, analysis)
 				contractCodeBitmapMissMeter.Mark(1)
 				codeBitmapCache.Add(c.CodeHash, analysis)
 			}

@@ -239,9 +239,8 @@ func opKeccak256(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) (
 	interpreter.hasher.Write(data)
 	interpreter.hasher.Read(interpreter.hasherBuf[:])
 
-	evm := interpreter.evm
-	if evm.Config.EnablePreimageRecording {
-		evm.StateDB.AddPreimage(interpreter.hasherBuf, data)
+	if interpreter.evm.Config.EnablePreimageRecording {
+		interpreter.evm.StateDB.AddPreimage(interpreter.hasherBuf, data)
 	}
 	size.SetBytes(interpreter.hasherBuf[:])
 	return nil, nil
@@ -1008,9 +1007,9 @@ func makePush(size uint64, pushByteSize int) executionFunc {
 }
 
 // make dup instruction function
-func makeDup(size int64) executionFunc {
+func makeDup(size int) executionFunc {
 	return func(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
-		scope.Stack.dup(int(size))
+		scope.Stack.dup(size)
 		return nil, nil
 	}
 }

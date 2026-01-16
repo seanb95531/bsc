@@ -1408,7 +1408,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 		return err
 	}
 
-	cx := chainContext{Chain: chain, parlia: p}
+	cx := chainContext{ChainHeaderReader: chain, parlia: p}
 
 	parent := chain.GetHeaderByHash(header.ParentHash)
 	if parent == nil {
@@ -1500,7 +1500,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
 	body *types.Body, receipts []*types.Receipt, tracer *tracing.Hooks) (*types.Block, []*types.Receipt, error) {
 	// No block rewards in PoA, so the state remains as is and uncles are dropped
-	cx := chainContext{Chain: chain, parlia: p}
+	cx := chainContext{ChainHeaderReader: chain, parlia: p}
 
 	if body.Transactions == nil {
 		body.Transactions = make([]*types.Transaction, 0)
@@ -2464,20 +2464,12 @@ func (p *Parlia) GetAncestorGenerationDepth(header *types.Header) uint64 {
 
 // chain context
 type chainContext struct {
-	Chain  consensus.ChainHeaderReader
+	consensus.ChainHeaderReader
 	parlia consensus.Engine
 }
 
 func (c chainContext) Engine() consensus.Engine {
 	return c.parlia
-}
-
-func (c chainContext) GetHeader(hash common.Hash, number uint64) *types.Header {
-	return c.Chain.GetHeader(hash, number)
-}
-
-func (c chainContext) Config() *params.ChainConfig {
-	return c.Chain.Config()
 }
 
 // apply message

@@ -72,7 +72,7 @@ func (p *statePrefetcher) Prefetch(transactions types.Transactions, header *type
 
 	// Iterate over and process the individual transactions
 	for i, tx := range transactions {
-		stateCpy := statedb.CopyDoPrefetch()
+		stateCpy := statedb.Copy() // closure
 		workers.Go(func() error {
 			// If block precaching was interrupted, abort
 			if interrupt != nil && interrupt.Load() {
@@ -122,12 +122,6 @@ func (p *statePrefetcher) Prefetch(transactions types.Transactions, header *type
 				fails.Add(1)
 				return nil // Ugh, something went horribly wrong, bail out
 			}
-			// Pre-load trie nodes for the intermediate root.
-			//
-			// This operation incurs significant memory allocations due to
-			// trie hashing and node decoding. TODO(rjl493456442): investigate
-			// ways to mitigate this overhead.
-			stateCpy.IntermediateRoot(true)
 			return nil
 		})
 	}
@@ -153,7 +147,7 @@ func (p *statePrefetcher) PrefetchBALSnapshot(balPrefetch *types.BlockAccessList
 	// prefetch snapshot cache
 	for i := 0; i < prefetchThreadBALSnapshot; i++ {
 		go func() {
-			newStatedb := statedb.CopyDoPrefetch()
+			newStatedb := statedb.Copy()
 			for {
 				select {
 				case accAddr := <-accChan:
@@ -211,7 +205,7 @@ func (p *statePrefetcher) PrefetchBALTrie(balPrefetch *types.BlockAccessListPref
 
 	for i := 0; i < prefetchThreadBALTrie; i++ {
 		go func() {
-			newStatedb := statedb.CopyDoPrefetch()
+			newStatedb := statedb.Copy()
 			for {
 				select {
 				case accItem := <-accItemsChan:
@@ -300,7 +294,7 @@ func (p *statePrefetcher) PrefetchMining(txs TransactionsByPriceAndNonce, header
 	txCh := make(chan *types.Transaction, 2*threadCount)
 	for i := 0; i < threadCount; i++ {
 		go func(startCh <-chan *types.Transaction, stopCh <-chan struct{}) {
-			newStatedb := statedb.CopyDoPrefetch()
+			newStatedb := statedb.Copy()
 			evm := vm.NewEVM(NewEVMBlockContext(header, p.chain, nil), newStatedb, p.config, cfg)
 			idx := 0
 			// Iterate over and process the individual transactions

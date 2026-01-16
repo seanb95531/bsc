@@ -39,9 +39,6 @@ type ChainHeaderReader interface {
 	// Config retrieves the blockchain's chain configuration.
 	Config() *params.ChainConfig
 
-	// GenesisHeader retrieves the chain's genesis block header.
-	GenesisHeader() *types.Header
-
 	// CurrentHeader retrieves the current header from the local chain.
 	CurrentHeader() *types.Header
 
@@ -53,6 +50,9 @@ type ChainHeaderReader interface {
 
 	// GetHeaderByHash retrieves a block header from the database by its hash.
 	GetHeaderByHash(hash common.Hash) *types.Header
+
+	// GenesisHeader retrieves the chain's genesis block header.
+	GenesisHeader() *types.Header
 
 	// GetTd retrieves the total difficulty from the database by hash and number.
 	GetTd(hash common.Hash, number uint64) *big.Int

@@ -40,10 +40,9 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		LogHistory                uint64 `toml:",omitempty"`
 		LogNoHistory              bool   `toml:",omitempty"`
 		LogExportCheckpoints      string
-		StateHistory              uint64 `toml:",omitempty"`
-		StateScheme               string `toml:",omitempty"`
-		PathSyncFlush             bool   `toml:",omitempty"`
-		JournalFileEnabled        bool
+		StateHistory              uint64                 `toml:",omitempty"`
+		StateScheme               string                 `toml:",omitempty"`
+		PathSyncFlush             bool                   `toml:",omitempty"`
 		DisableTxIndexer          bool                   `toml:",omitempty"`
 		RequiredBlocks            map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck        bool                   `toml:"-"`
@@ -60,23 +59,31 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TriesVerifyMode           core.VerifyMode
 		Preimages                 bool
 		FilterLogCacheSize        int
+		LogQueryLimit             int
 		Miner                     minerconfig.Config
 		TxPool                    legacypool.Config
 		BlobPool                  blobpool.Config
 		GPO                       gasprice.Config
 		EnablePreimageRecording   bool
+		EnableWitnessStats        bool
+		StatelessSelfValidation   bool
+		EnableStateSizeTracking   bool
 		VMTrace                   string
 		VMTraceJsonConfig         string
 		RPCGasCap                 uint64
 		RPCEVMTimeout             time.Duration
 		RPCTxFeeCap               float64
-		OverridePassedForkTime    *uint64 `toml:",omitempty"`
-		OverrideLorentz           *uint64 `toml:",omitempty"`
-		OverrideMaxwell           *uint64 `toml:",omitempty"`
-		OverrideFermi             *uint64 `toml:",omitempty"`
-		OverrideOsaka             *uint64 `toml:",omitempty"`
-		OverrideMendel            *uint64 `toml:",omitempty"`
-		OverrideVerkle            *uint64 `toml:",omitempty"`
+		OverridePassedForkTime    *uint64       `toml:",omitempty"`
+		OverrideLorentz           *uint64       `toml:",omitempty"`
+		OverrideMaxwell           *uint64       `toml:",omitempty"`
+		OverrideFermi             *uint64       `toml:",omitempty"`
+		OverrideOsaka             *uint64       `toml:",omitempty"`
+		OverrideMendel            *uint64       `toml:",omitempty"`
+		OverrideBPO1              *uint64       `toml:",omitempty"`
+		OverrideBPO2              *uint64       `toml:",omitempty"`
+		OverrideVerkle            *uint64       `toml:",omitempty"`
+		TxSyncDefaultTimeout      time.Duration `toml:",omitempty"`
+		TxSyncMaxTimeout          time.Duration `toml:",omitempty"`
 		BlobExtraReserve          uint64
 		EnableOpcodeOptimizing    bool
 		EnableIncrSnapshots       bool
@@ -113,7 +120,6 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.StateHistory = c.StateHistory
 	enc.StateScheme = c.StateScheme
 	enc.PathSyncFlush = c.PathSyncFlush
-	enc.JournalFileEnabled = c.JournalFileEnabled
 	enc.DisableTxIndexer = c.DisableTxIndexer
 	enc.RequiredBlocks = c.RequiredBlocks
 	enc.SkipBcVersionCheck = c.SkipBcVersionCheck
@@ -130,11 +136,15 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TriesVerifyMode = c.TriesVerifyMode
 	enc.Preimages = c.Preimages
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
+	enc.LogQueryLimit = c.LogQueryLimit
 	enc.Miner = c.Miner
 	enc.TxPool = c.TxPool
 	enc.BlobPool = c.BlobPool
 	enc.GPO = c.GPO
 	enc.EnablePreimageRecording = c.EnablePreimageRecording
+	enc.EnableWitnessStats = c.EnableWitnessStats
+	enc.StatelessSelfValidation = c.StatelessSelfValidation
+	enc.EnableStateSizeTracking = c.EnableStateSizeTracking
 	enc.VMTrace = c.VMTrace
 	enc.VMTraceJsonConfig = c.VMTraceJsonConfig
 	enc.RPCGasCap = c.RPCGasCap
@@ -146,7 +156,11 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.OverrideFermi = c.OverrideFermi
 	enc.OverrideOsaka = c.OverrideOsaka
 	enc.OverrideMendel = c.OverrideMendel
+	enc.OverrideBPO1 = c.OverrideBPO1
+	enc.OverrideBPO2 = c.OverrideBPO2
 	enc.OverrideVerkle = c.OverrideVerkle
+	enc.TxSyncDefaultTimeout = c.TxSyncDefaultTimeout
+	enc.TxSyncMaxTimeout = c.TxSyncMaxTimeout
 	enc.BlobExtraReserve = c.BlobExtraReserve
 	enc.EnableOpcodeOptimizing = c.EnableOpcodeOptimizing
 	enc.EnableIncrSnapshots = c.EnableIncrSnapshots
@@ -184,10 +198,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		LogHistory                *uint64 `toml:",omitempty"`
 		LogNoHistory              *bool   `toml:",omitempty"`
 		LogExportCheckpoints      *string
-		StateHistory              *uint64 `toml:",omitempty"`
-		StateScheme               *string `toml:",omitempty"`
-		PathSyncFlush             *bool   `toml:",omitempty"`
-		JournalFileEnabled        *bool
+		StateHistory              *uint64                `toml:",omitempty"`
+		StateScheme               *string                `toml:",omitempty"`
+		PathSyncFlush             *bool                  `toml:",omitempty"`
 		DisableTxIndexer          *bool                  `toml:",omitempty"`
 		RequiredBlocks            map[uint64]common.Hash `toml:"-"`
 		SkipBcVersionCheck        *bool                  `toml:"-"`
@@ -204,23 +217,31 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TriesVerifyMode           *core.VerifyMode
 		Preimages                 *bool
 		FilterLogCacheSize        *int
+		LogQueryLimit             *int
 		Miner                     *minerconfig.Config
 		TxPool                    *legacypool.Config
 		BlobPool                  *blobpool.Config
 		GPO                       *gasprice.Config
 		EnablePreimageRecording   *bool
+		EnableWitnessStats        *bool
+		StatelessSelfValidation   *bool
+		EnableStateSizeTracking   *bool
 		VMTrace                   *string
 		VMTraceJsonConfig         *string
 		RPCGasCap                 *uint64
 		RPCEVMTimeout             *time.Duration
 		RPCTxFeeCap               *float64
-		OverridePassedForkTime    *uint64 `toml:",omitempty"`
-		OverrideLorentz           *uint64 `toml:",omitempty"`
-		OverrideMaxwell           *uint64 `toml:",omitempty"`
-		OverrideFermi             *uint64 `toml:",omitempty"`
-		OverrideOsaka             *uint64 `toml:",omitempty"`
-		OverrideMendel            *uint64 `toml:",omitempty"`
-		OverrideVerkle            *uint64 `toml:",omitempty"`
+		OverridePassedForkTime    *uint64        `toml:",omitempty"`
+		OverrideLorentz           *uint64        `toml:",omitempty"`
+		OverrideMaxwell           *uint64        `toml:",omitempty"`
+		OverrideFermi             *uint64        `toml:",omitempty"`
+		OverrideOsaka             *uint64        `toml:",omitempty"`
+		OverrideMendel            *uint64        `toml:",omitempty"`
+		OverrideBPO1              *uint64        `toml:",omitempty"`
+		OverrideBPO2              *uint64        `toml:",omitempty"`
+		OverrideVerkle            *uint64        `toml:",omitempty"`
+		TxSyncDefaultTimeout      *time.Duration `toml:",omitempty"`
+		TxSyncMaxTimeout          *time.Duration `toml:",omitempty"`
 		BlobExtraReserve          *uint64
 		EnableOpcodeOptimizing    *bool
 		EnableIncrSnapshots       *bool
@@ -310,9 +331,6 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.PathSyncFlush != nil {
 		c.PathSyncFlush = *dec.PathSyncFlush
 	}
-	if dec.JournalFileEnabled != nil {
-		c.JournalFileEnabled = *dec.JournalFileEnabled
-	}
 	if dec.DisableTxIndexer != nil {
 		c.DisableTxIndexer = *dec.DisableTxIndexer
 	}
@@ -361,6 +379,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.FilterLogCacheSize != nil {
 		c.FilterLogCacheSize = *dec.FilterLogCacheSize
 	}
+	if dec.LogQueryLimit != nil {
+		c.LogQueryLimit = *dec.LogQueryLimit
+	}
 	if dec.Miner != nil {
 		c.Miner = *dec.Miner
 	}
@@ -375,6 +396,15 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.EnablePreimageRecording != nil {
 		c.EnablePreimageRecording = *dec.EnablePreimageRecording
+	}
+	if dec.EnableWitnessStats != nil {
+		c.EnableWitnessStats = *dec.EnableWitnessStats
+	}
+	if dec.StatelessSelfValidation != nil {
+		c.StatelessSelfValidation = *dec.StatelessSelfValidation
+	}
+	if dec.EnableStateSizeTracking != nil {
+		c.EnableStateSizeTracking = *dec.EnableStateSizeTracking
 	}
 	if dec.VMTrace != nil {
 		c.VMTrace = *dec.VMTrace
@@ -409,8 +439,20 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	if dec.OverrideMendel != nil {
 		c.OverrideMendel = dec.OverrideMendel
 	}
+	if dec.OverrideBPO1 != nil {
+		c.OverrideBPO1 = dec.OverrideBPO1
+	}
+	if dec.OverrideBPO2 != nil {
+		c.OverrideBPO2 = dec.OverrideBPO2
+	}
 	if dec.OverrideVerkle != nil {
 		c.OverrideVerkle = dec.OverrideVerkle
+	}
+	if dec.TxSyncDefaultTimeout != nil {
+		c.TxSyncDefaultTimeout = *dec.TxSyncDefaultTimeout
+	}
+	if dec.TxSyncMaxTimeout != nil {
+		c.TxSyncMaxTimeout = *dec.TxSyncMaxTimeout
 	}
 	if dec.BlobExtraReserve != nil {
 		c.BlobExtraReserve = *dec.BlobExtraReserve

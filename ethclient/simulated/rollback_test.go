@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/node"
 )
 
 // TestTransactionRollbackBehavior tests that calling Rollback on the simulated backend doesn't prevent subsequent
@@ -33,6 +35,11 @@ func TestTransactionRollbackBehavior(t *testing.T) {
 		types.GenesisAlloc{
 			testAddr:  {Balance: big.NewInt(10000000000000000)},
 			testAddr2: {Balance: big.NewInt(10000000000000000)},
+		},
+		// Disable Osaka to prevent blob v0→v1 conversion in blobpool.
+		// BSC does not support blob sidecar v1.
+		func(nodeConf *node.Config, ethConf *ethconfig.Config) {
+			ethConf.Genesis.Config.OsakaTime = nil
 		},
 	)
 	defer sim.Close()
