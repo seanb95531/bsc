@@ -71,6 +71,11 @@ var (
 	justifiedBlockGauge = metrics.NewRegisteredGauge("chain/head/justified", nil)
 	finalizedBlockGauge = metrics.NewRegisteredGauge("chain/head/finalized", nil)
 
+	finalizedSkippedOlderCounter      = metrics.NewRegisteredCounter("chain/finalized/skipped/older", nil)
+	finalizedSkippedSameHeightCounter = metrics.NewRegisteredCounter("chain/finalized/skipped/sameheight", nil)
+	finalizedLatencyEarlyGauge        = metrics.NewRegisteredGauge("chain/finalized/latency/early", nil)  // early finalization latency (via VotePool)
+	finalizedLatencyNormalGauge       = metrics.NewRegisteredGauge("chain/finalized/latency/normal", nil) // normal finalization latency (via block processing)
+
 	blockInsertMgaspsGauge  = metrics.NewRegisteredGauge("chain/insert/mgasps", nil)
 	blockInsertTxSizeGauge  = metrics.NewRegisteredGauge("chain/insert/txsize", nil)
 	blockInsertGasUsedGauge = metrics.NewRegisteredGauge("chain/insert/gasused", nil)
@@ -381,6 +386,7 @@ type BlockChain struct {
 	currentBlock          atomic.Pointer[types.Header] // Current head of the chain
 	currentSnapBlock      atomic.Pointer[types.Header] // Current head of snap-sync
 	currentFinalBlock     atomic.Pointer[types.Header] // Latest (consensus) finalized block
+	highestNotifiedFinal  atomic.Pointer[types.Header] // Highest finalized block that has been notified (for deduplication)
 	chasingHead           atomic.Pointer[types.Header]
 	historyPrunePoint     atomic.Pointer[history.PrunePoint]
 
@@ -1156,6 +1162,45 @@ func (bc *BlockChain) SetFinalized(header *types.Header) {
 	} else {
 		rawdb.WriteFinalizedBlockHash(bc.db, common.Hash{})
 	}
+}
+
+// NotifyFinalized sends a FinalizedHeaderEvent.
+// This is used both by normal block processing and vote pool early finalization.
+func (bc *BlockChain) NotifyFinalized(header *types.Header) {
+	if header == nil {
+		return
+	}
+	headerHash := header.Hash()
+	headerNumber := header.Number.Uint64()
+
+	// Check highest notified to deduplicate
+	highestNotified := bc.highestNotifiedFinal.Load()
+	if highestNotified != nil {
+		// Skip if older finalized block
+		if headerNumber < highestNotified.Number.Uint64() {
+			finalizedSkippedOlderCounter.Inc(1)
+			return
+		}
+		// Skip if same finalized block (deduplicate by hash)
+		if headerHash == highestNotified.Hash() {
+			return
+		}
+		// Same height but different hash (possible reorg)
+		if headerNumber == highestNotified.Number.Uint64() {
+			finalizedSkippedSameHeightCounter.Inc(1)
+		}
+	}
+
+	// Update highest notified before sending to prevent duplicate notifications
+	bc.highestNotifiedFinal.Store(header)
+
+	// Calculate early finalization latency in milliseconds
+	latencyMs := int64(uint64(time.Now().UnixMilli()) - header.MilliTimestamp())
+	finalizedLatencyEarlyGauge.Update(latencyMs)
+
+	bc.finalizedHeaderFeed.Send(FinalizedHeaderEvent{header})
+	finalizedBlockGauge.Update(int64(headerNumber))
+	log.Debug("Early finalized block", "number", header.Number, "hash", headerHash, "latencyMs", latencyMs)
 }
 
 // setHeadBeyondRoot rewinds the local chain to a new head with the extra condition
@@ -2095,7 +2140,8 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		if sealedBlockSender != nil {
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: block.Header()})
 			if finalizedHeader != nil {
-				bc.finalizedHeaderFeed.Send(FinalizedHeaderEvent{finalizedHeader})
+				finalizedLatencyNormalGauge.Update(int64(uint64(time.Now().UnixMilli()) - finalizedHeader.MilliTimestamp()))
+				bc.NotifyFinalized(finalizedHeader)
 			}
 		}
 	}
@@ -2197,7 +2243,8 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 			bc.chainHeadFeed.Send(ChainHeadEvent{Header: lastCanon.Header()})
 			if posa, ok := bc.Engine().(consensus.PoSA); ok {
 				if finalizedHeader := posa.GetFinalizedHeader(bc, lastCanon.Header()); finalizedHeader != nil {
-					bc.finalizedHeaderFeed.Send(FinalizedHeaderEvent{finalizedHeader})
+					finalizedLatencyNormalGauge.Update(int64(uint64(time.Now().UnixMilli()) - finalizedHeader.MilliTimestamp()))
+					bc.NotifyFinalized(finalizedHeader)
 				}
 			}
 		}
