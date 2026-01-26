@@ -265,6 +265,10 @@ type Parlia struct {
 	slashABI                   abi.ABI
 	stakeHubABI                abi.ABI
 
+	// finalizedNotified tracks blocks that have already triggered early finalization notification
+	// to avoid duplicate notifications
+	finalizedNotified *lru.Cache[common.Hash, struct{}]
+
 	// The fields below are for testing only
 	fakeDiff bool // Skip difficulty verifications
 }
@@ -305,6 +309,7 @@ func New(
 		recentSnaps:                lru.NewCache[common.Hash, *Snapshot](inMemorySnapshots),
 		recentHeaders:              lru.NewCache[string, common.Hash](inMemoryHeaders),
 		signatures:                 lru.NewCache[common.Hash, common.Address](inMemorySignatures),
+		finalizedNotified:          lru.NewCache[common.Hash, struct{}](inMemorySnapshots),
 		validatorSetABIBeforeLuban: vABIBeforeLuban,
 		validatorSetABI:            vABI,
 		slashABI:                   sABI,
@@ -1408,7 +1413,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 		return err
 	}
 
-	cx := chainContext{Chain: chain, parlia: p}
+	cx := chainContext{ChainHeaderReader: chain, parlia: p}
 
 	parent := chain.GetHeaderByHash(header.ParentHash)
 	if parent == nil {
@@ -1500,7 +1505,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB,
 	body *types.Body, receipts []*types.Receipt, tracer *tracing.Hooks) (*types.Block, []*types.Receipt, error) {
 	// No block rewards in PoA, so the state remains as is and uncles are dropped
-	cx := chainContext{Chain: chain, parlia: p}
+	cx := chainContext{ChainHeaderReader: chain, parlia: p}
 
 	if body.Transactions == nil {
 		body.Transactions = make([]*types.Transaction, 0)
@@ -2275,6 +2280,8 @@ func (p *Parlia) GetJustifiedNumberAndHash(chain consensus.ChainHeaderReader, he
 }
 
 // GetFinalizedHeader returns highest finalized block header.
+// It first checks VotePool for votes that may have reached quorum but not yet included in block headers,
+// then falls back to the attestation in the snapshot.
 func (p *Parlia) GetFinalizedHeader(chain consensus.ChainHeaderReader, header *types.Header) *types.Header {
 	if chain == nil || header == nil {
 		return nil
@@ -2294,7 +2301,49 @@ func (p *Parlia) GetFinalizedHeader(chain consensus.ChainHeaderReader, header *t
 		return chain.GetHeaderByNumber(0) // keep consistent with GetJustifiedNumberAndHash
 	}
 
+	currentJustifiedNumber := snap.Attestation.TargetNumber
+	currentJustifiedHash := snap.Attestation.TargetHash
+
+	// Try to check if currentJustifiedNumber can become finalized by checking VotePool.
+	// We only need to check currentJustifiedNumber + 1, since currentJustifiedNumber is already the latest justified.
+	if p.VotePool != nil && currentJustifiedNumber == header.Number.Uint64()-1 {
+		// Check if the next block (direct child) has reached quorum in VotePool
+		votes := p.VotePool.FetchVotesByBlockHash(header.Hash(), currentJustifiedNumber)
+		quorum := cmath.CeilDiv(len(snap.Validators)*2, 3)
+
+		if len(votes) >= quorum {
+			return chain.GetHeader(currentJustifiedHash, currentJustifiedNumber)
+		}
+	}
+
+	// Fallback to the original logic: finalized is the source in attestation
 	return chain.GetHeader(snap.Attestation.SourceHash, snap.Attestation.SourceNumber)
+}
+
+// CheckFinalityAndNotify checks if votes for the target block have reached quorum,
+// and if so, notifies the blockchain of early finalization via the notifyFn callback.
+func (p *Parlia) CheckFinalityAndNotify(chain consensus.ChainHeaderReader, targetBlockHash common.Hash, notifyFn func(finalizedHeader *types.Header)) {
+	// Skip if already notified for this block
+	if _, ok := p.finalizedNotified.Get(targetBlockHash); ok {
+		return
+	}
+
+	// Get target block header
+	currentHeader := chain.CurrentHeader()
+	if currentHeader == nil || currentHeader.Hash() != targetBlockHash {
+		return
+	}
+
+	finalizedHeader := p.GetFinalizedHeader(chain, currentHeader)
+	if finalizedHeader == nil || finalizedHeader.Number.Uint64() == 0 {
+		return
+	}
+
+	// Mark as notified to avoid duplicate notifications
+	p.finalizedNotified.Add(targetBlockHash, struct{}{})
+
+	// Notify via callback
+	notifyFn(finalizedHeader)
 }
 
 // ===========================     utility function        ==========================
@@ -2464,20 +2513,12 @@ func (p *Parlia) GetAncestorGenerationDepth(header *types.Header) uint64 {
 
 // chain context
 type chainContext struct {
-	Chain  consensus.ChainHeaderReader
+	consensus.ChainHeaderReader
 	parlia consensus.Engine
 }
 
 func (c chainContext) Engine() consensus.Engine {
 	return c.parlia
-}
-
-func (c chainContext) GetHeader(hash common.Hash, number uint64) *types.Header {
-	return c.Chain.GetHeader(hash, number)
-}
-
-func (c chainContext) Config() *params.ChainConfig {
-	return c.Chain.Config()
 }
 
 // apply message
