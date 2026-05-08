@@ -358,7 +358,9 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		for i, item := range res {
 			block := types.NewBlockWithHeader(item.Header).WithBody(types.Body{Transactions: item.Txs, Uncles: item.Uncles})
 			block = block.WithSidecars(item.Sidecars)
-			block = block.WithBAL(item.BAL)
+			if item.BAL != nil && h.chain.Engine().VerifyBAL(block, item.BAL) == nil {
+				block = block.WithBAL(item.BAL)
+			}
 			block.ReceivedAt = time.Now()
 			block.ReceivedFrom = p.ID()
 			if err := block.SanityCheck(); err != nil {
