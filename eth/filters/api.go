@@ -221,6 +221,7 @@ func (api *FilterAPI) NewVotesFilter() rpc.ID {
 	api.filtersMu.Unlock()
 
 	gopool.Submit(func() {
+		defer voteSub.Unsubscribe()
 		for {
 			select {
 			case vote := <-votes:
@@ -345,6 +346,7 @@ func (api *FilterAPI) NewFinalizedHeaderFilter() rpc.ID {
 	api.filtersMu.Unlock()
 
 	gopool.Submit(func() {
+		defer headerSub.Unsubscribe()
 		for {
 			select {
 			case h := <-headers:
