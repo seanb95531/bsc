@@ -48,6 +48,7 @@ var DeprecatedFlags = []cli.Flag{
 	JournalFileFlag,
 	LogExportCheckpointsFlag,
 	EnableBALFlag,
+	TxPoolOverflowPoolSlotsFlag,
 }
 
 var (
@@ -153,6 +154,13 @@ var (
 		Name:     "enable-bal",
 		Hidden:   true,
 		Usage:    "Deprecated: BEP-592 block access list has been removed; this flag has no effect",
+		Category: flags.DeprecatedCategory,
+	}
+	TxPoolOverflowPoolSlotsFlag = &cli.Uint64Flag{
+		Name:     "txpool.overflowpoolslots",
+		Hidden:   true,
+		Usage:    "Deprecated: Maximum number of transaction slots in overflow pool; this flag has no effect",
+		Value:    0,
 		Category: flags.DeprecatedCategory,
 	}
 )
