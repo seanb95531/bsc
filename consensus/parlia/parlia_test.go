@@ -1,6 +1,7 @@
 package parlia
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"fmt"
@@ -9,12 +10,15 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
@@ -703,7 +707,7 @@ func TestParlia_applyTransactionTracing(t *testing.T) {
 	hooks := recording.hooks()
 
 	cx := chainContext{ChainHeaderReader: chain, parlia: engine}
-	applyErr := engine.applyTransaction(msg, state.NewHookedState(stateDB, hooks), bs[0].Header(), cx, &txs, &receipts, &receivedTxs, &usedGas, false, hooks)
+	applyErr := engine.applyTransaction(msg, state.NewHookedState(stateDB, hooks), bs[0].Header(), cx, &txs, &receipts, &receivedTxs, &usedGas, systemTxImporting, hooks)
 	if applyErr != nil {
 		t.Fatalf("failed to apply system contract transaction: %v", applyErr)
 	}
@@ -720,6 +724,430 @@ func TestParlia_applyTransactionTracing(t *testing.T) {
 
 	if !slices.Equal(recording.records, expectedRecords) {
 		t.Errorf("expected \n%s\n\ngot\n\n%s", formatRecords(expectedRecords), formatRecords(recording.records))
+	}
+}
+
+func TestParlia_applyTransactionModes(t *testing.T) {
+	frdir := t.TempDir()
+	db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false)
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+
+	trieDB := triedb.NewDatabase(db, nil)
+	defer trieDB.Close()
+
+	config := params.ParliaTestChainConfig
+	gspec := &core.Genesis{
+		Config: config,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: new(big.Int).SetUint64(10 * params.Ether)}},
+	}
+	mockEngine := &mockParlia{}
+	genesisBlock := gspec.MustCommit(db, trieDB)
+	chain, _ := core.NewBlockChain(db, gspec, mockEngine, nil)
+	defer chain.Stop()
+	parents, _ := core.GenerateChain(config, genesisBlock, mockEngine, db, 1, nil)
+	header := parents[0].Header()
+
+	engine := New(config, db, nil, genesisBlock.Hash())
+	validatorKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate validator key: %v", err)
+	}
+	validator := crypto.PubkeyToAddress(validatorKey.PublicKey)
+	engine.Authorize(validator, nil, func(account accounts.Account, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+		if account.Address != validator {
+			return nil, fmt.Errorf("unexpected signing account %s", account.Address)
+		}
+		return types.SignTx(tx, types.LatestSigner(config), validatorKey)
+	})
+
+	data, err := engine.validatorSetABI.Pack("distributeFinalityReward", make([]common.Address, 0), make([]*big.Int, 0))
+	if err != nil {
+		t.Fatalf("failed to pack system contract method: %v", err)
+	}
+	msg := engine.getSystemMessage(validator, common.HexToAddress(systemcontracts.ValidatorContract), data, common.Big0)
+	cx := chainContext{ChainHeaderReader: chain, parlia: engine}
+
+	newState := func(t *testing.T) *state.StateDB {
+		t.Helper()
+		stateDB, err := state.New(genesisBlock.Root(), state.NewDatabase(trieDB, nil))
+		if err != nil {
+			t.Fatalf("failed to create stateDB: %v", err)
+		}
+		return stateDB
+	}
+	expectedTx := func(stateDB *state.StateDB) *types.Transaction {
+		nonce := stateDB.GetNonce(msg.From)
+		return types.NewTransaction(nonce, *msg.To, msg.Value, msg.GasLimit, msg.GasPrice, msg.Data)
+	}
+	apply := func(t *testing.T, stateDB *state.StateDB, receivedTxs *[]*types.Transaction, mode systemTxMode) ([]*types.Transaction, error) {
+		t.Helper()
+		txs := make([]*types.Transaction, 0, 1)
+		receipts := make([]*types.Receipt, 0, 1)
+		usedGas := uint64(0)
+		err := engine.applyTransaction(msg, stateDB, header, cx, &txs, &receipts, receivedTxs, &usedGas, mode, nil)
+		return txs, err
+	}
+
+	t.Run("mining signs system tx from validator", func(t *testing.T) {
+		txs, err := apply(t, newState(t), nil, systemTxMining)
+		if err != nil {
+			t.Fatalf("applyTransaction mining failed: %v", err)
+		}
+		if len(txs) != 1 {
+			t.Fatalf("expected one tx, got %d", len(txs))
+		}
+		if isUnsignedTx(txs[0]) {
+			t.Fatalf("mining mode must sign system tx")
+		}
+	})
+
+	t.Run("mining rejects non-validator sender", func(t *testing.T) {
+		original := msg.From
+		msg.From = common.HexToAddress("0x3000000000000000000000000000000000000003")
+		defer func() { msg.From = original }()
+
+		_, err := apply(t, newState(t), nil, systemTxMining)
+		if err == nil || !strings.Contains(err.Error(), "cannot sign system tx") {
+			t.Fatalf("expected cannot sign error, got %v", err)
+		}
+	})
+
+	t.Run("packing keeps system tx unsigned", func(t *testing.T) {
+		txs, err := apply(t, newState(t), nil, systemTxPacking)
+		if err != nil {
+			t.Fatalf("applyTransaction packing failed: %v", err)
+		}
+		if len(txs) != 1 {
+			t.Fatalf("expected one tx, got %d", len(txs))
+		}
+		if !isUnsignedTx(txs[0]) {
+			t.Fatalf("packing mode must keep system tx unsigned")
+		}
+	})
+
+	t.Run("importing consumes matching received tx", func(t *testing.T) {
+		stateDB := newState(t)
+		receivedTxs := []*types.Transaction{expectedTx(stateDB)}
+		txs, err := apply(t, stateDB, &receivedTxs, systemTxImporting)
+		if err != nil {
+			t.Fatalf("applyTransaction importing failed: %v", err)
+		}
+		if len(receivedTxs) != 0 {
+			t.Fatalf("expected received tx to be consumed, got %d left", len(receivedTxs))
+		}
+		if len(txs) != 1 || txs[0] == nil {
+			t.Fatalf("expected imported tx to be appended")
+		}
+	})
+
+	t.Run("importing rejects missing received tx", func(t *testing.T) {
+		receivedTxs := []*types.Transaction{}
+		_, err := apply(t, newState(t), &receivedTxs, systemTxImporting)
+		if err == nil || !strings.Contains(err.Error(), "supposed to get a actual transaction") {
+			t.Fatalf("expected missing received tx error, got %v", err)
+		}
+	})
+
+	t.Run("importing rejects mismatched received tx", func(t *testing.T) {
+		stateDB := newState(t)
+		expected := expectedTx(stateDB)
+		wrongTx := types.NewTransaction(expected.Nonce()+1, *expected.To(), expected.Value(), expected.Gas(), expected.GasPrice(), expected.Data())
+		receivedTxs := []*types.Transaction{wrongTx}
+		_, err := apply(t, stateDB, &receivedTxs, systemTxImporting)
+		if err == nil || !strings.Contains(err.Error(), "expected tx hash") {
+			t.Fatalf("expected tx hash mismatch error, got %v", err)
+		}
+	})
+}
+
+func isUnsignedTx(tx *types.Transaction) bool {
+	v, r, s := tx.RawSignatureValues()
+	return v.Sign() == 0 && r.Sign() == 0 && s.Sign() == 0
+}
+
+// TestParliaFinalizeAndAssembleBidBlock verifies BidBlock assembly emits unsigned system txs.
+func TestParliaFinalizeAndAssembleBidBlock(t *testing.T) {
+	frdir := t.TempDir()
+	db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false)
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+
+	trieDB := triedb.NewDatabase(db, nil)
+	defer trieDB.Close()
+
+	config := params.ParliaTestChainConfig
+	gspec := &core.Genesis{
+		Config: config,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: new(big.Int).SetUint64(10 * params.Ether)}},
+	}
+	mockEngine := &mockParlia{}
+	genesisBlock := gspec.MustCommit(db, trieDB)
+	chain, _ := core.NewBlockChain(db, gspec, mockEngine, nil)
+	defer chain.Stop()
+	parents, _ := core.GenerateChain(config, genesisBlock, mockEngine, db, 1, nil)
+	parent := parents[0]
+	rawdb.WriteBlock(db, parent)
+
+	engine := New(config, db, nil, genesisBlock.Hash())
+	validatorKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	validator := crypto.PubkeyToAddress(validatorKey.PublicKey)
+	engine.Authorize(validator, nil, func(account accounts.Account, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+		if account.Address != validator {
+			return nil, fmt.Errorf("unexpected signing account %s", account.Address)
+		}
+		return types.SignTx(tx, types.LatestSigner(config), validatorKey)
+	})
+
+	gasFee := uint256.NewInt(12345)
+	newHeader := func() *types.Header {
+		return &types.Header{
+			ParentHash: parent.Hash(),
+			Number:     new(big.Int).Add(parent.Number(), common.Big1),
+			Coinbase:   validator,
+			Difficulty: new(big.Int).Set(diffInTurn),
+			GasLimit:   params.SystemTxsGasHardLimit,
+			Time:       parent.Time() + 1,
+		}
+	}
+	newState := func() *state.StateDB {
+		stateDB, err := state.New(parent.Root(), state.NewDatabase(trieDB, nil))
+		if err != nil {
+			t.Fatalf("failed to create stateDB: %v", err)
+		}
+		stateDB.SetBalance(consensus.SystemAddress, new(uint256.Int).Set(gasFee), tracing.BalanceChangeUnspecified)
+		return stateDB
+	}
+
+	signedBlock, signedReceipts, err := engine.FinalizeAndAssemble(chain, newHeader(), newState(), &types.Body{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to finalize signed block: %v", err)
+	}
+	unsignedBlock, unsignedReceipts, err := engine.FinalizeAndAssembleBidBlock(chain, newHeader(), newState(), &types.Body{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to finalize BidBlock: %v", err)
+	}
+
+	if signedBlock.Root() != unsignedBlock.Root() {
+		t.Fatalf("state root mismatch: signed=%s unsigned=%s", signedBlock.Root(), unsignedBlock.Root())
+	}
+	if signedBlock.ReceiptHash() != unsignedBlock.ReceiptHash() {
+		t.Fatalf("receipt hash mismatch: signed=%s unsigned=%s", signedBlock.ReceiptHash(), unsignedBlock.ReceiptHash())
+	}
+	if signedBlock.Bloom() != unsignedBlock.Bloom() {
+		t.Fatalf("receipt bloom mismatch")
+	}
+	if signedBlock.GasUsed() != unsignedBlock.GasUsed() {
+		t.Fatalf("gas used mismatch: signed=%d unsigned=%d", signedBlock.GasUsed(), unsignedBlock.GasUsed())
+	}
+	if len(signedBlock.Transactions()) == 0 || len(unsignedBlock.Transactions()) == 0 {
+		t.Fatalf("expected system transactions in both finalized blocks")
+	}
+	if isUnsignedTx(signedBlock.Transactions()[0]) {
+		t.Fatalf("expected default finalize path to sign system txs")
+	}
+	if !isUnsignedTx(unsignedBlock.Transactions()[0]) {
+		t.Fatalf("expected BidBlock assembly to keep system txs unsigned")
+	}
+	if len(signedReceipts) != len(unsignedReceipts) {
+		t.Fatalf("receipt count mismatch: signed=%d unsigned=%d", len(signedReceipts), len(unsignedReceipts))
+	}
+}
+
+func TestParliaFinalizeAndAssembleBidBlockRewardsHeaderCoinbase(t *testing.T) {
+	frdir := t.TempDir()
+	db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false)
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+
+	trieDB := triedb.NewDatabase(db, nil)
+	defer trieDB.Close()
+
+	config := params.ParliaTestChainConfig
+	gspec := &core.Genesis{
+		Config: config,
+		Alloc:  types.GenesisAlloc{testAddr: {Balance: new(big.Int).SetUint64(10 * params.Ether)}},
+	}
+	mockEngine := &mockParlia{}
+	genesisBlock := gspec.MustCommit(db, trieDB)
+	chain, _ := core.NewBlockChain(db, gspec, mockEngine, nil)
+	defer chain.Stop()
+	parents, _ := core.GenerateChain(config, genesisBlock, mockEngine, db, 1, nil)
+	parent := parents[0]
+	rawdb.WriteBlock(db, parent)
+
+	engine := New(config, db, nil, genesisBlock.Hash())
+	localValidator := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	blockCoinbase := common.HexToAddress("0x2000000000000000000000000000000000000002")
+	engine.Authorize(localValidator, nil, nil)
+
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number(), common.Big1),
+		Coinbase:   blockCoinbase,
+		Difficulty: new(big.Int).Set(diffInTurn),
+		GasLimit:   params.SystemTxsGasHardLimit,
+		Time:       parent.Time() + 1,
+	}
+	stateDB, err := state.New(parent.Root(), state.NewDatabase(trieDB, nil))
+	if err != nil {
+		t.Fatalf("failed to create stateDB: %v", err)
+	}
+	stateDB.SetBalance(consensus.SystemAddress, uint256.NewInt(12345), tracing.BalanceChangeUnspecified)
+
+	block, _, err := engine.FinalizeAndAssembleBidBlock(chain, header, stateDB, &types.Body{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to finalize BidBlock: %v", err)
+	}
+
+	wantDeposit, err := engine.validatorSetABI.Pack("deposit", blockCoinbase)
+	if err != nil {
+		t.Fatalf("failed to pack expected deposit: %v", err)
+	}
+	wrongDeposit, err := engine.validatorSetABI.Pack("deposit", localValidator)
+	if err != nil {
+		t.Fatalf("failed to pack wrong deposit: %v", err)
+	}
+	var found bool
+	for _, tx := range block.Transactions() {
+		if tx.To() == nil || *tx.To() != common.HexToAddress(systemcontracts.ValidatorContract) {
+			continue
+		}
+		if bytes.Equal(tx.Data(), wrongDeposit) {
+			t.Fatalf("deposit reward routed to local p.val %s, want header coinbase %s", localValidator, blockCoinbase)
+		}
+		if bytes.Equal(tx.Data(), wantDeposit) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing deposit reward for header coinbase %s", blockCoinbase)
+	}
+}
+
+func TestParliaPrepareForBidBlock(t *testing.T) {
+	frdir := t.TempDir()
+	db, err := rawdb.NewDatabaseWithFreezer(rawdb.NewMemoryDatabase(), frdir, "", false)
+	if err != nil {
+		t.Fatalf("failed to create database with ancient backend: %v", err)
+	}
+
+	trieDB := triedb.NewDatabase(db, nil)
+	defer trieDB.Close()
+
+	config := params.ParliaTestChainConfig
+	otherValidator := common.HexToAddress("0x2000000000000000000000000000000000000000")
+	extra := make([]byte, extraVanity+validatorNumberSize+2*validatorBytesLength+extraSeal)
+	extra[extraVanity] = 2
+	copy(extra[extraVanity+validatorNumberSize:], testAddr[:])
+	copy(extra[extraVanity+validatorNumberSize+validatorBytesLength:], otherValidator[:])
+	gspec := &core.Genesis{
+		Config:    config,
+		ExtraData: extra,
+		Timestamp: uint64(time.Now().Add(-10 * time.Second).Unix()),
+		Alloc:     types.GenesisAlloc{testAddr: {Balance: new(big.Int).SetUint64(10 * params.Ether)}},
+	}
+	mockEngine := &mockParlia{}
+	genesisBlock := gspec.MustCommit(db, trieDB)
+	chain, _ := core.NewBlockChain(db, gspec, mockEngine, nil)
+	defer chain.Stop()
+
+	validatorEngine := New(config, db, nil, genesisBlock.Hash())
+	inturnValidator, err := validatorEngine.NextInTurnValidator(chain, genesisBlock.Header())
+	if err != nil {
+		t.Fatalf("failed to get in-turn validator: %v", err)
+	}
+	validatorEngine.Authorize(inturnValidator, nil, nil)
+	builderEngine := New(config, db, nil, genesisBlock.Hash())
+	if inturnValidator == testAddr {
+		builderEngine.Authorize(otherValidator, nil, nil)
+	} else {
+		builderEngine.Authorize(testAddr, nil, nil)
+	}
+
+	newHeader := func() *types.Header {
+		return &types.Header{
+			ParentHash: genesisBlock.Hash(),
+			Number:     common.Big1,
+			GasLimit:   params.SystemTxsGasHardLimit,
+		}
+	}
+	validatorHeader := newHeader()
+	builderHeader := newHeader()
+
+	if err := validatorEngine.Prepare(chain, validatorHeader); err != nil {
+		t.Fatalf("failed to prepare validator header: %v", err)
+	}
+	if err := builderEngine.PrepareForBidBlock(chain, builderHeader); err != nil {
+		t.Fatalf("failed to prepare BidBlock header: %v", err)
+	}
+
+	if builderHeader.Coinbase != validatorHeader.Coinbase {
+		t.Fatalf("coinbase mismatch: builder=%s validator=%s", builderHeader.Coinbase, validatorHeader.Coinbase)
+	}
+	if builderHeader.Coinbase != inturnValidator {
+		t.Fatalf("builder coinbase mismatch: have %s want %s", builderHeader.Coinbase, inturnValidator)
+	}
+	// Prepare and PrepareForBidBlock share the prepare() core, so headers
+	// prepared back-to-back land on the same blockTimeForRamanujanFork output.
+	// Allow one 50ms quantum of tolerance for the rare case where the two
+	// calls straddle a wall-clock alignment tick.
+	diff := int64(builderHeader.MilliTimestamp()) - int64(validatorHeader.MilliTimestamp())
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 50 {
+		t.Fatalf("builder/validator time diverge by %dms: builder=%d validator=%d",
+			diff, builderHeader.MilliTimestamp(), validatorHeader.MilliTimestamp())
+	}
+	if builderHeader.Difficulty.Cmp(validatorHeader.Difficulty) != 0 {
+		t.Fatalf("difficulty mismatch: builder=%s validator=%s", builderHeader.Difficulty, validatorHeader.Difficulty)
+	}
+	// BidBlock prepare must produce a byte-identical Extra to the normal validator
+	// prepare (length-equal is too weak: a wrong forkhash/vanity byte would slip through).
+	if !bytes.Equal(builderHeader.Extra, validatorHeader.Extra) {
+		t.Fatalf("extra mismatch:\n builder   =%x\n validator =%x", builderHeader.Extra, validatorHeader.Extra)
+	}
+
+	// SetExtraData branch checks on a non-epoch header (no validator-set contract call):
+	// forkhash bytes, zeroed seal space, and vanity truncation/padding. The epoch
+	// validators / turnLength branches require a populated validator contract and are
+	// covered by e2e.
+	const vanityLen = extraVanity - nextForkHashSize // 28
+	genesisTime := chain.GenesisHeader().Time
+	wantForkHash := forkid.NextForkHash(config, genesisBlock.Hash(), genesisTime, validatorHeader.Number.Uint64(), validatorHeader.Time)
+	if got := validatorHeader.Extra[vanityLen:extraVanity]; !bytes.Equal(got, wantForkHash[:]) {
+		t.Fatalf("forkhash mismatch: got %x want %x", got, wantForkHash[:])
+	}
+	if seal := validatorHeader.Extra[len(validatorHeader.Extra)-extraSeal:]; !bytes.Equal(seal, make([]byte, extraSeal)) {
+		t.Fatalf("seal space not zeroed: %x", seal)
+	}
+
+	setExtra := func(vanity []byte) []byte {
+		h := newHeader()
+		h.Time = validatorHeader.Time
+		h.Extra = append([]byte(nil), vanity...)
+		if err := validatorEngine.SetExtraData(chain, h); err != nil {
+			t.Fatalf("SetExtraData: %v", err)
+		}
+		return h.Extra
+	}
+	// over-long vanity is truncated to vanityLen bytes.
+	long := bytes.Repeat([]byte{0xAB}, extraVanity*2)
+	if got := setExtra(long)[:vanityLen]; !bytes.Equal(got, long[:vanityLen]) {
+		t.Fatalf("vanity not truncated: got %x", got)
+	}
+	// short vanity is zero-padded to vanityLen bytes.
+	short := []byte{0x01, 0x02}
+	ext := setExtra(short)
+	if !bytes.Equal(ext[:len(short)], short) || !bytes.Equal(ext[len(short):vanityLen], make([]byte, vanityLen-len(short))) {
+		t.Fatalf("vanity not zero-padded: got %x", ext[:vanityLen])
 	}
 }
 

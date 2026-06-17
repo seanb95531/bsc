@@ -539,6 +539,49 @@ func (api *BlockChainAPI) GetBlockByHash(ctx context.Context, hash common.Hash, 
 	return nil, err
 }
 
+// BlockMevInfo describes a block's MEV builder attribution.
+// Version "v1" means legacy SendBid; version "v2" means BEP-675 SendBidBlock.
+// Local-mined blocks omit Builder and Version.
+type BlockMevInfo struct {
+	BlockNumber hexutil.Uint64  `json:"blockNumber"`
+	BlockHash   common.Hash     `json:"blockHash"`
+	Miner       common.Address  `json:"miner"`
+	Version     string          `json:"version,omitempty"`
+	Builder     *common.Address `json:"builder,omitempty"`
+}
+
+// GetBlockMevInfo returns the MEV builder attribution for the given block.
+func (api *BlockChainAPI) GetBlockMevInfo(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*BlockMevInfo, error) {
+	header, err := api.b.HeaderByNumberOrHash(ctx, blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+	if header == nil {
+		return nil, errors.New("block not found")
+	}
+	info := &BlockMevInfo{
+		BlockNumber: hexutil.Uint64(header.Number.Uint64()),
+		BlockHash:   header.Hash(),
+		Miner:       header.Coinbase,
+	}
+	if header.RequestsHash == nil {
+		return info, nil
+	}
+	version, builder, ok := types.DecodeBlockMevInfo(*header.RequestsHash)
+	if !ok {
+		return info, nil
+	}
+	switch version {
+	case types.BlockMevInfoVersionBid:
+		info.Version = "v1"
+	case types.BlockMevInfoVersionBidBlock:
+		info.Version = "v2"
+	}
+	b := builder
+	info.Builder = &b
+	return info, nil
+}
+
 func (api *BlockChainAPI) Health() bool {
 	if rpc.RpcServingTimer != nil {
 		return rpc.RpcServingTimer.Snapshot().Percentile(0.75) < float64(UnHealthyTimeout)

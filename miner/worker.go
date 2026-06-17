@@ -77,6 +77,12 @@ var (
 	inturnBlocksGauge    = metrics.NewRegisteredGauge("worker/inturnBlocks", nil)
 	bestBidGasUsedGauge  = metrics.NewRegisteredGauge("worker/bestBidGasUsed", nil)  // MGas
 	bestWorkGasUsedGauge = metrics.NewRegisteredGauge("worker/bestWorkGasUsed", nil) // MGas
+	bidBlockExistGauge   = metrics.NewRegisteredGauge("worker/bidBlockExist", nil)
+	bidBlockCommitGauge  = metrics.NewRegisteredGauge("worker/bidBlockCommit", nil)
+	bidBlockGasUsedGauge = metrics.NewRegisteredGauge("worker/bidBlockGasUsed", nil) // MGas
+	bidBlockRevokeGauge  = metrics.NewRegisteredGauge("worker/bidBlockRevoke", nil)  // cumulative revoke count
+	// bidBlockRevokedBuildersGauge snapshots how many builders are revoked, taken at each revoke.
+	bidBlockRevokedBuildersGauge = metrics.NewRegisteredGauge("worker/bidBlockRevokedBuilders", nil)
 
 	writeBlockTimer      = metrics.NewRegisteredTimer("worker/writeblock", nil)
 	finalizeBlockTimer   = metrics.NewRegisteredTimer("worker/finalizeblock", nil)
@@ -128,6 +134,8 @@ type task struct {
 	state    *state.StateDB
 	block    *types.Block
 
+	bidBlockInfo *bidBlockTaskInfo
+
 	createdAt     time.Time
 	miningStartAt time.Time
 }
@@ -178,6 +186,7 @@ type getWorkReq struct {
 type bidFetcher interface {
 	GetBestBid(parentHash common.Hash) *BidRuntime
 	GetSimulatingBid(prevBlockHash common.Hash) *BidRuntime
+	GetBestBidBlock(parentHash common.Hash) *types.DecodedBidBlock
 }
 
 // worker is the main object which takes care of submitting new work to consensus engine
@@ -189,6 +198,7 @@ type worker struct {
 	chainConfig *params.ChainConfig
 	engine      consensus.Engine
 	eth         Backend
+	permMgr     *BidBlockPermissionManager
 	prio        []common.Address // A list of senders to prioritize
 	chain       *core.BlockChain
 
@@ -234,7 +244,10 @@ type worker struct {
 	resubmitHook func(time.Duration, time.Duration) // Method to call upon updating resubmitting interval.
 }
 
-func newWorker(config *minerconfig.Config, engine consensus.Engine, eth Backend, mux *event.TypeMux) *worker {
+func newWorker(config *minerconfig.Config, engine consensus.Engine, eth Backend, mux *event.TypeMux, permMgr *BidBlockPermissionManager) *worker {
+	if permMgr == nil {
+		permMgr = NewBidBlockPermissionManager()
+	}
 	chainConfig := eth.BlockChain().Config()
 	prefetcher := core.NewStatePrefetcher(chainConfig, eth.BlockChain().HeadChain())
 	if config.Mev.Enabled != nil && *config.Mev.Enabled {
@@ -246,6 +259,7 @@ func newWorker(config *minerconfig.Config, engine consensus.Engine, eth Backend,
 		chainConfig:        chainConfig,
 		engine:             engine,
 		eth:                eth,
+		permMgr:            permMgr,
 		chain:              eth.BlockChain(),
 		mux:                mux,
 		coinbase:           config.Etherbase,
@@ -574,6 +588,17 @@ func (w *worker) resultLoop() {
 				log.Error("Block found but no relative pending task", "number", block.Number(), "sealhash", sealhash, "hash", hash)
 				continue
 			}
+
+			if !w.recordMinedBlock(block) {
+				continue
+			}
+
+			// BidBlock path: broadcast first, then InsertChain for async verification
+			if task.bidBlockInfo != nil {
+				w.handleBidBlockResult(block, task)
+				continue
+			}
+
 			// Different block could share same sealhash, deep copy here to prevent write-write conflict.
 			var (
 				receipts = make([]*types.Receipt, len(task.receipts))
@@ -601,27 +626,6 @@ func (w *worker) resultLoop() {
 				logs = append(logs, receipt.Logs...)
 			}
 
-			if prev, ok := w.recentMinedBlocks.Get(block.NumberU64()); ok {
-				doubleSign := false
-				prevParents := prev
-				if slices.Contains(prevParents, block.ParentHash()) {
-					log.Error("Reject Double Sign!!", "block", block.NumberU64(),
-						"hash", block.Hash(),
-						"root", block.Root(),
-						"ParentHash", block.ParentHash())
-					doubleSign = true
-				}
-				if doubleSign {
-					continue
-				}
-				prevParents = append(prevParents, block.ParentHash())
-				w.recentMinedBlocks.Add(block.NumberU64(), prevParents)
-			} else {
-				// Add() will call removeOldest internally to remove the oldest element
-				// if the LRU Cache is full
-				w.recentMinedBlocks.Add(block.NumberU64(), []common.Hash{block.ParentHash()})
-			}
-
 			// Commit block and state to database.
 			start := time.Now()
 			status, err := w.chain.WriteBlockAndSetHead(block, receipts, logs, task.state, w.mux)
@@ -645,6 +649,26 @@ func (w *worker) resultLoop() {
 			return
 		}
 	}
+}
+
+// recordMinedBlock records the mined parent for this height and rejects repeat signing.
+func (w *worker) recordMinedBlock(block *types.Block) bool {
+	if prev, ok := w.recentMinedBlocks.Get(block.NumberU64()); ok {
+		if slices.Contains(prev, block.ParentHash()) {
+			log.Error("Reject Double Sign!!", "block", block.NumberU64(),
+				"hash", block.Hash(),
+				"root", block.Root(),
+				"ParentHash", block.ParentHash())
+			return false
+		}
+		prevParents := append(prev, block.ParentHash())
+		w.recentMinedBlocks.Add(block.NumberU64(), prevParents)
+	} else {
+		// Add() will call removeOldest internally to remove the oldest element
+		// if the LRU Cache is full.
+		w.recentMinedBlocks.Add(block.NumberU64(), []common.Hash{block.ParentHash()})
+	}
+	return true
 }
 
 // makeEnv creates a new environment for the sealing block.
@@ -1401,8 +1425,18 @@ LOOP:
 
 	// when out-turn, use bestWork to prevent bundle leakage.
 	// when in-turn, compare with remote work.
+	var bestBid *BidRuntime
+	var bestBidBlock *types.DecodedBidBlock
+	var bidBlockCommitted bool
+	var bidBlockFallback bool
+	var simBidBlockReward *uint256.Int
+	var simBidValidatorReward *uint256.Int
+	var localValidatorReward *uint256.Int
 	if w.bidFetcher != nil && bestWork.header.Difficulty.Cmp(diffInTurn) == 0 {
 		inturnBlocksGauge.Inc(1)
+		localValidatorReward = new(uint256.Int).Mul(bestReward, uint256.NewInt(*w.config.Mev.ValidatorCommission))
+		localValidatorReward.Div(localValidatorReward, uint256.NewInt(10000))
+
 		// We want to start sealing the block as late as possible here if mev is enabled, so we could give builder the chance to send their final bid.
 		// Time left till sealing the block.
 		tillSealingTime := time.Until(time.UnixMilli(int64(bestWork.header.MilliTimestamp()))) - *w.config.DelayLeftOver
@@ -1421,44 +1455,71 @@ LOOP:
 			}
 		}
 
-		bestBid := w.bidFetcher.GetBestBid(bestWork.header.ParentHash)
-
+		// Stage 1 candidate A — legacy SendBid (simBid).
+		bestBid = w.bidFetcher.GetBestBid(bestWork.header.ParentHash)
 		if bestBid != nil {
 			bidExistGauge.Inc(1)
 			bestBidGasUsedGauge.Update(int64(bestBid.bid.GasUsed) / 1_000_000)
 			bestWorkGasUsedGauge.Update(int64(bestWork.header.GasUsed) / 1_000_000)
-
-			log.Debug("BidSimulator: final compare", "block", bestWork.header.Number.Uint64(),
-				"localBlockReward", bestReward.String(),
-				"bidBlockReward", bestBid.packedBlockReward.String())
+			simBidBlockReward = uint256.MustFromBig(bestBid.packedBlockReward)
+			simBidValidatorReward = uint256.MustFromBig(bestBid.packedValidatorReward)
 		}
 
-		if bestBid != nil && bestReward.CmpBig(bestBid.packedBlockReward) < 0 {
-			// localValidatorReward is the reward for the validator self by the local block.
-			localValidatorReward := new(uint256.Int).Mul(bestReward, uint256.NewInt(*w.config.Mev.ValidatorCommission))
-			localValidatorReward.Div(localValidatorReward, uint256.NewInt(10000))
+		// Stage 1 candidate B — SendBidBlock.
+		bestBidBlock = w.bidFetcher.GetBestBidBlock(parentHash)
+		if bestBidBlock != nil {
+			bidBlockExistGauge.Inc(1)
+		}
+	}
 
-			log.Debug("BidSimulator: final compare", "block", bestWork.header.Number.Uint64(),
-				"localValidatorReward", localValidatorReward.String(),
-				"bidValidatorReward", bestBid.packedValidatorReward.String())
+	if bestBidBlock != nil && w.selectBidBlock(bestBidBlock, simBidBlockReward, simBidValidatorReward, bestReward) {
+		task, err := w.prepareBidBlockTask(bestBidBlock, start)
+		if err != nil {
+			log.Error("Failed to prepare bid block, fallback",
+				"builder", bestBidBlock.Builder,
+				"err", err)
+			bidBlockFallback = true
+		} else {
+			systemTxCount := len(bestBidBlock.Txs) - bestBidBlock.SystemTxStart
+			w.enqueueBidBlockTask(task, systemTxCount)
+			bidBlockCommitted = true
+			bidBlockCommitGauge.Inc(1)
+			bidBlockGasUsedGauge.Update(int64(bestBidBlock.Header.GasUsed) / 1_000_000)
+			bestWorkGasUsedGauge.Update(int64(bestWork.header.GasUsed) / 1_000_000)
+		}
+	}
 
-			// blockReward(benefits delegators) and validatorReward(benefits the validator) are both optimal
-			if localValidatorReward.CmpBig(bestBid.packedValidatorReward) < 0 {
-				bidWinGauge.Inc(1)
-				if bestBid.greedyMerged {
-					greedyMergeOnchainCounter.Inc(1)
-				}
+	if bidBlockCommitted {
+		if w.current != nil {
+			w.current.discard()
+			w.current = nil
+		}
+		return
+	}
 
-				bestWork = bestBid.env
-
-				log.Info("[BUILDER BLOCK]",
-					"block", bestWork.header.Number.Uint64(),
-					"builder", bestBid.bid.Builder,
-					"blockReward", weiToEtherStringF6(bestBid.packedBlockReward),
-					"validatorReward", weiToEtherStringF6(bestBid.packedValidatorReward),
-					"bid", bestBid.bid.Hash().TerminalString(),
-				)
+	// simBid fallback. Re-runs the legacy dual-threshold gate against simBid
+	// whenever no BidBlock is being committed.
+	if bestBid != nil {
+		if bestReward.Cmp(simBidBlockReward) < 0 &&
+			localValidatorReward.Cmp(simBidValidatorReward) < 0 {
+			bidWinGauge.Inc(1)
+			if bestBid.greedyMerged {
+				greedyMergeOnchainCounter.Inc(1)
 			}
+			bestWork = bestBid.env
+			// Record MEV v1 (bid path) source and builder address.
+			setBidMevInfo(bestWork.header, bestBid.bid.Builder, false)
+			logMsg := "[BUILDER BLOCK]"
+			if bidBlockFallback {
+				logMsg = "[BUILDER BLOCK] (simBid fallback)"
+			}
+			log.Info(logMsg,
+				"block", bestWork.header.Number.Uint64(),
+				"builder", bestBid.bid.Builder,
+				"blockReward", weiToEtherStringF6(simBidBlockReward.ToBig()),
+				"validatorReward", weiToEtherStringF6(simBidValidatorReward.ToBig()),
+				"bid", bestBid.bid.Hash().TerminalString(),
+			)
 		}
 	}
 

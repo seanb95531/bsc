@@ -566,8 +566,16 @@ func (b *EthAPIBackend) HasBuilder(builder common.Address) bool {
 	return b.Miner().HasBuilder(builder)
 }
 
+func (b *EthAPIBackend) GetBidBlockPermission(builder common.Address) types.BidBlockPermissionStatus {
+	return b.Miner().GetBidBlockPermission(builder)
+}
+
 func (b *EthAPIBackend) SendBid(ctx context.Context, bid *types.BidArgs) (common.Hash, error) {
 	return b.Miner().SendBid(ctx, bid)
+}
+
+func (b *EthAPIBackend) SendBidBlock(ctx context.Context, args *types.BidBlockArgs) (common.Hash, error) {
+	return b.Miner().SendBidBlock(ctx, args)
 }
 
 func (b *EthAPIBackend) MinerInTurn() bool {

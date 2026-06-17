@@ -98,6 +98,43 @@ func testTransactionMarshal(t *testing.T, tests []txData, config *params.ChainCo
 	}
 }
 
+func TestMevAPIGetBidBlockPermission(t *testing.T) {
+	builder := common.HexToAddress("0x1")
+	blockHash := common.HexToHash("0xabc")
+	revokedAt := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
+	resetAt := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
+	api := NewMevAPI(&testBackend{
+		bidBlockPermission: types.BidBlockPermissionStatus{
+			Allowed:   false,
+			Reason:    "gasfee_overclaim",
+			BlockHash: blockHash,
+			BlockNum:  100,
+			RevokedAt: revokedAt,
+			ResetAt:   resetAt,
+		},
+	})
+
+	result := api.GetBidBlockPermission(builder)
+	if result.Allowed {
+		t.Fatal("permission should be revoked")
+	}
+	if result.Reason != "gasfee_overclaim" {
+		t.Fatalf("reason: got %s", result.Reason)
+	}
+	if result.BlockHash == nil || *result.BlockHash != blockHash {
+		t.Fatalf("blockHash: got %v, want %s", result.BlockHash, blockHash)
+	}
+	if result.BlockNumber == nil || *result.BlockNumber != hexutil.Uint64(100) {
+		t.Fatalf("blockNumber: got %v, want 100", result.BlockNumber)
+	}
+	if result.RevokedAt == nil || !result.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("revokedAt: got %v, want %s", result.RevokedAt, revokedAt)
+	}
+	if !result.ResetAt.Equal(resetAt) {
+		t.Fatalf("resetAt: got %s, want %s", result.ResetAt, resetAt)
+	}
+}
+
 func TestTransaction_RoundTripRpcJSON(t *testing.T) {
 	t.Parallel()
 
@@ -450,6 +487,8 @@ type testBackend struct {
 
 	syncDefaultTimeout time.Duration
 	syncMaxTimeout     time.Duration
+
+	bidBlockPermission types.BidBlockPermissionStatus
 }
 
 func fakeBlockHash(txh common.Hash) common.Hash {
@@ -721,6 +760,9 @@ func (b testBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscripti
 
 func (b *testBackend) MevRunning() bool                       { return false }
 func (b *testBackend) HasBuilder(builder common.Address) bool { return false }
+func (b *testBackend) GetBidBlockPermission(builder common.Address) types.BidBlockPermissionStatus {
+	return b.bidBlockPermission
+}
 func (b *testBackend) MevParams() *types.MevParams {
 	return &types.MevParams{}
 }
@@ -729,6 +771,9 @@ func (b *testBackend) StopMev()                                                 
 func (b *testBackend) AddBuilder(builder common.Address, builderUrl string) error { return nil }
 func (b *testBackend) RemoveBuilder(builder common.Address) error                 { return nil }
 func (b *testBackend) SendBid(ctx context.Context, bid *types.BidArgs) (common.Hash, error) {
+	panic("implement me")
+}
+func (b *testBackend) SendBidBlock(ctx context.Context, args *types.BidBlockArgs) (common.Hash, error) {
 	panic("implement me")
 }
 func (b *testBackend) MinerInTurn() bool { return false }
