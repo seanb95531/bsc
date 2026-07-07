@@ -169,7 +169,7 @@ func (in *EVMInterpreter) CopyAndInstallSuperInstruction() {
 // considered a revert-and-consume-all-gas operation except for
 // ErrExecutionReverted which means revert-and-keep-gas-left.
 func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (ret []byte, err error) {
-	if in.evm.Context.Coinbase.Cmp(contract.address) == 0 {
+	if in.evm.chainConfig.IsInBSC() && in.evm.Context.Coinbase.Cmp(contract.address) == 0 {
 		return nil, ErrCoinbaseAsContract
 	}
 
