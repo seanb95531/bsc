@@ -65,7 +65,7 @@ func (p *Parlia) isUnsignedSystemTxCandidate(tx *types.Transaction) bool {
 	if tx == nil || tx.To() == nil || !isToSystemContract(*tx.To()) {
 		return false
 	}
-	if tx.GasPrice() == nil || tx.GasPrice().Sign() != 0 {
+	if tx.GasPrice() == nil || tx.EffectiveGasPriceForBSC().Sign() != 0 {
 		return false
 	}
 	v, r, s := tx.RawSignatureValues()

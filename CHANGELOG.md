@@ -1,6 +1,6 @@
 # Changelog
-## v1.7.4
-v1.7.4 is for BSC Chapel testnet [Pasteur hardfork](https://github.com/bnb-chain/BEPs/blob/master/BEPs/BEP-673.md),the hard fork time is 2026-07-XX 02:30:00 AM UTC
+## v1.7.6
+v1.7.6 is for BSC Chapel testnet [Pasteur hardfork](https://github.com/bnb-chain/BEPs/blob/master/BEPs/BEP-673.md),the hard fork time is 2026-07-XX 02:30:00 AM UTC
 
 ### Pasteur Hardfork
 - [\#3623](https://github.com/bnb-chain/bsc/pull/3623) core/vm: reject duplicate bridge validators at Pasteur
@@ -86,6 +86,24 @@ Procedure: before upgrading, review the deprecated flags and config fields liste
   - `[Eth] EnableBAL` in config.toml: **must be removed before upgrading** — will cause a startup error if left in
   - `[TxPool] OverflowPoolSlots` in config.toml: silently ignored, but recommend removing to keep config clean
 Schedule(Timeline): TBD
+
+## v1.7.5
+v1.7.5 is a maintenance release.
+
+## MetaInfo
+Mandatory Update Required: No
+Target Audience: all BSC Mainnet/Testnet users
+Procedure: simply binary replacement should be good
+Schedule(Timeline): no scheduled upgrade timeline
+
+## v1.7.4
+v1.7.4 is a maintenance release.
+
+## MetaInfo
+Mandatory Update Required: No
+Target Audience: all BSC Mainnet/Testnet users
+Procedure: simply binary replacement should be good
+Schedule(Timeline): no scheduled upgrade timeline
 
 ## v1.7.3
 v1.7.3 is a maintenance release, which mainly fixes online block pruning and kvdb abnormal continuous growth, pls refer change log for detail.
